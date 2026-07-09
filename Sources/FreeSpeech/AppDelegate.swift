@@ -13,6 +13,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let engine: TranscriptionEngine = WhisperCppEngine()
     private let inserter = TextInserter()
     private let postProcessor = PostProcessor()
+    private let modelDownloader = ModelDownloader()
+    private weak var onboardingStore: OnboardingStore?
     private let learningStore = LearningStore(fileURL: AppPaths.learningFile)
     private lazy var editWatcher = EditWatcher(store: learningStore)
     private var hud: HUDController!
@@ -56,7 +58,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusBar.onOpenSettings = { [weak self] in self?.settingsWindow.show() }
         onboardingWindow = OnboardingWindowController { [weak self] close in
             guard let self else { fatalError("onboarding store requested after teardown") }
-            return OnboardingStore(settings: self.settings, deps: OnboardingDeps(
+            let store = OnboardingStore(settings: self.settings, deps: OnboardingDeps(
                 microphoneAuthorized: { Permissions.microphoneAuthorized() },
                 requestMicrophone: { completion in Permissions.requestMicrophone(completion: completion) },
                 accessibilityTrusted: { Permissions.accessibilityTrusted(promptIfNeeded: false) },
@@ -69,6 +71,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 beginPractice: { handler in self.onPracticeTranscript = handler },
                 endPractice: { self.onPracticeTranscript = nil },
                 onFinished: close))
+            self.onboardingStore = store
+            return store
         }
         statusBar.onOpenOnboarding = { [weak self] in self?.onboardingWindow.show() }
 
@@ -168,6 +172,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func loadModel() {
         let url = AppPaths.modelFile(named: settings.modelName)
         loadedModelPath = url.path
+        if FileManager.default.fileExists(atPath: url.path) {
+            loadModelFile(url)
+        } else {
+            // First run of a shared copy: fetch the model once, then load it.
+            downloadThenLoad(name: settings.modelName, to: url)
+        }
+    }
+
+    private func loadModelFile(_ url: URL) {
         whisperQueue.async { [weak self] in
             guard let self else { return }
             do {
@@ -177,6 +190,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 DispatchQueue.main.async { self.showError(error.localizedDescription) }
             }
         }
+    }
+
+    private func downloadThenLoad(name: String, to url: URL) {
+        Log.info("model \(name) not on disk, downloading once")
+        setModelStatus("Downloading model 0%")
+        modelDownloader.download(modelName: name, to: url, progress: { [weak self] frac in
+            DispatchQueue.main.async { self?.setModelStatus("Downloading model \(Int(frac * 100))%") }
+        }, completion: { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                switch result {
+                case .success(let file):
+                    self.setModelStatus(nil)
+                    self.loadModelFile(file)
+                case .failure(let error):
+                    self.setModelStatus(nil)
+                    self.showError("Model download failed: \(error.localizedDescription). Check your connection, then reopen FreeSpeech.")
+                }
+            }
+        })
+    }
+
+    private func setModelStatus(_ text: String?) {
+        onboardingStore?.modelStatus = text
+        statusBar.showTransientStatus(text)
     }
 
     private func applySettings() {

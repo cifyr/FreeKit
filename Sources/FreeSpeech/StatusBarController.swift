@@ -25,6 +25,17 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         update(state: .idle)
     }
 
+    // Overrides the menu/tooltip line with a transient message (e.g. model download
+    // progress); passing nil restores the normal state line.
+    func showTransientStatus(_ text: String?) {
+        if let text {
+            statusLine = text
+            statusItem.button?.toolTip = text
+        } else {
+            update(state: currentState)
+        }
+    }
+
     func update(state: DictationState) {
         currentState = state
         let (symbol, description, line): (String, String, String)

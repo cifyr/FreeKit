@@ -35,12 +35,25 @@ final class AudioRecorder {
         sampleRate: Double(WhisperCppEngine.sampleRate),
         channels: 1, interleaved: false)!
 
-    func start(maxSeconds: Double) throws {
+    func start(maxSeconds: Double, device: AudioInputDevice? = nil) throws {
         precondition(!isRecording, "start called while already recording")
 
         // Fresh engine per session: survives default-device changes between dictations.
         let engine = AVAudioEngine()
         let input = engine.inputNode
+        if let device {
+            // Bind the user's preferred mic instead of the system default input.
+            var deviceID = device.deviceID
+            let status = AudioUnitSetProperty(
+                input.audioUnit!, kAudioOutputUnitProperty_CurrentDevice,
+                kAudioUnitScope_Global, 0, &deviceID,
+                UInt32(MemoryLayout<AudioDeviceID>.size))
+            if status != noErr {
+                Log.error("could not bind preferred mic \"\(device.name)\" (status \(status)), falling back to system default")
+            } else {
+                Log.info("recording using preferred mic: \(device.name) [\(device.uid)]")
+            }
+        }
         let inputFormat = input.outputFormat(forBus: 0)
         Log.info("recording start: input format \(inputFormat.sampleRate)Hz \(inputFormat.channelCount)ch, max \(Int(maxSeconds))s")
         guard inputFormat.sampleRate > 0, inputFormat.channelCount > 0 else {

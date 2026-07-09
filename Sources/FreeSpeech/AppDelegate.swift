@@ -9,6 +9,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let engine: TranscriptionEngine = WhisperCppEngine()
     private let inserter = TextInserter()
     private let postProcessor = PostProcessor()
+    private let learningStore = LearningStore(fileURL: AppPaths.learningFile)
+    private lazy var editWatcher = EditWatcher(store: learningStore)
     private var hud: HUDController!
     private var statusBar: StatusBarController!
     private var settingsWindow: SettingsWindowController!
@@ -38,6 +40,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return SettingsStore(
                 settings: self.settings,
                 languageModelAvailable: self.postProcessor.languageModelAvailable,
+                learningStore: self.learningStore,
                 onHotkeyChanged: { self.installHotkey() },
                 onModelChanged: { self.applySettings() })
         }
@@ -152,7 +155,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // HUD first: it must appear the instant the hotkey fires.
         hud.show(.recording)
         do {
-            try recorder.start(maxSeconds: settings.maxRecordingSeconds)
+            try recorder.start(
+                maxSeconds: settings.maxRecordingSeconds,
+                device: AudioDevices.preferredDevice(priority: settings.micPriority))
         } catch {
             Log.error("recording start failed: \(error.localizedDescription)")
             perform(machine.handle(.recordingFailed(error.localizedDescription), mode: settings.mode))
@@ -176,14 +181,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
 
             do {
+                // Learned terms extend the vocabulary hint so whisper hears the
+                // user's words right the first time.
+                var hint = self.settings.vocabularyHint
+                let learnedTerms = self.learningStore.vocabularyTerms()
+                    .filter { !hint.localizedCaseInsensitiveContains($0) }
+                if !learnedTerms.isEmpty {
+                    hint += " " + learnedTerms.joined(separator: ", ") + "."
+                }
                 let raw = try self.engine.transcribe(
                     samples: samples, timeout: Self.transcriptionTimeout,
-                    beamSize: 1, vocabularyHint: self.settings.vocabularyHint)
+                    beamSize: 1, vocabularyHint: hint)
                 let mode = self.settings.postProcessing
                 // "Do nothing" means raw whisper output, only trimmed so pasting is sane.
                 var text: String? = mode == .off
                     ? raw.trimmingCharacters(in: .whitespacesAndNewlines)
                     : TranscriptCleaner.clean(raw)
+                if let t = text, mode != .off {
+                    // Learned corrections are deterministic and effectively free.
+                    text = self.learningStore.apply(to: t)
+                }
                 if text?.isEmpty == true { text = nil }
                 if let cleaned = text, mode.needsLanguageModel {
                     DispatchQueue.main.async { self.hud.show(.processing) }
@@ -213,6 +230,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Log.info(String(format: "stop-to-insert latency: %.2fs", CFAbsoluteTimeGetCurrent() - stoppedAt))
             hud.show(.success)
             perform(machine.handle(.transcriptionSucceeded, mode: settings.mode))
+            if settings.learningEnabled {
+                editWatcher.watch(inserted: transcript)
+            }
         } catch {
             Log.error("insertion failed: \(error.localizedDescription)")
             perform(machine.handle(.transcriptionFailed(error.localizedDescription), mode: settings.mode))

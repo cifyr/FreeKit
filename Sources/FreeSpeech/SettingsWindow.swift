@@ -2,12 +2,18 @@ import AppKit
 import SwiftUI
 import FreeSpeechCore
 
+extension AudioInputDevice: Identifiable {
+    public var id: String { uid }
+}
+
 final class SettingsStore: ObservableObject {
     // SwiftUI also declares a `Settings` scene type, hence the qualified name.
     private let settings: FreeSpeechCore.Settings
+    private let learningStore: LearningStore
     private let onHotkeyChanged: () -> Void
     private let onModelChanged: () -> Void
     private var captureMonitor: Any?
+    private var involvedModifiers: Set<Int64> = []
 
     @Published var mode: ActivationMode { didSet { settings.mode = mode } }
     @Published var hotkey: HotkeyPreset {
@@ -27,12 +33,18 @@ final class SettingsStore: ObservableObject {
     @Published var vocabularyHint: String { didSet { settings.vocabularyHint = vocabularyHint } }
     @Published var isCapturingShortcut = false
     @Published var installedModels: [String] = []
+    @Published var connectedMics: [AudioInputDevice] = []
+    @Published var micPriority: [String] { didSet { settings.micPriority = micPriority } }
+    @Published var learningEnabled: Bool { didSet { settings.learningEnabled = learningEnabled } }
+    @Published var learnedSummary: String = ""
 
     let languageModelAvailable: Bool
 
     init(settings: FreeSpeechCore.Settings, languageModelAvailable: Bool,
+         learningStore: LearningStore,
          onHotkeyChanged: @escaping () -> Void, onModelChanged: @escaping () -> Void) {
         self.settings = settings
+        self.learningStore = learningStore
         self.languageModelAvailable = languageModelAvailable
         self.onHotkeyChanged = onHotkeyChanged
         self.onModelChanged = onModelChanged
@@ -42,35 +54,83 @@ final class SettingsStore: ObservableObject {
         _postProcessing = Published(initialValue: settings.postProcessing)
         _tone = Published(initialValue: settings.tone)
         _vocabularyHint = Published(initialValue: settings.vocabularyHint)
-        refreshModels()
+        _micPriority = Published(initialValue: settings.micPriority)
+        _learningEnabled = Published(initialValue: settings.learningEnabled)
+        refresh()
     }
 
-    func refreshModels() {
+    func refresh() {
         installedModels = AppPaths.installedModels()
+        // Priority devices first (in priority order), then the rest as connected.
+        let connected = AudioDevices.inputDevices()
+        let prioritized = micPriority.compactMap { uid in connected.first { $0.uid == uid } }
+        connectedMics = prioritized + connected.filter { d in !micPriority.contains(d.uid) }
+        refreshLearnedSummary()
     }
 
-    // Captures the next key press (regular or bare modifier) as the hotkey. Esc cancels.
+    // nil = system default input (no priority set or none of them connected).
+    var activeMicUID: String? {
+        MicPriority.pick(priority: micPriority, connected: connectedMics.map(\.uid))
+    }
+
+    func promoteMic(_ uid: String) {
+        micPriority = [uid] + micPriority.filter { $0 != uid }
+        refresh()
+    }
+
+    func resetMicPriority() {
+        micPriority = []
+        refresh()
+    }
+
+    func resetLearning() {
+        learningStore.reset()
+        Log.info("learning store reset from settings")
+        refreshLearnedSummary()
+    }
+
+    private func refreshLearnedSummary() {
+        learnedSummary = "\(learningStore.promotedCount) active rules, \(learningStore.ruleCount) corrections observed"
+    }
+
+    // Captures the next chord as the hotkey: a plain key, a combo like Cmd+K or
+    // Cmd+Opt+Space, or a bare modifier (press and release it alone). Esc cancels.
     func beginShortcutCapture() {
         guard captureMonitor == nil else { return }
         isCapturingShortcut = true
+        involvedModifiers = []
         Log.info("shortcut capture started")
         captureMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { [weak self] event in
             guard let self else { return event }
             let code = Int64(event.keyCode)
             switch event.type {
             case .keyDown:
-                if code != 53 {  // Esc cancels without saving
-                    self.capture(code)
-                } else {
+                if code == 53 {  // Esc cancels without saving
                     self.endShortcutCapture()
+                    return nil
                 }
+                // fn is excluded from combos: it rides along on F-keys and arrows.
+                let flags = event.modifierFlags.intersection([.command, .option, .shift, .control])
+                var mods: HotkeyModifiers = []
+                if flags.contains(.command) { mods.insert(.command) }
+                if flags.contains(.option) { mods.insert(.option) }
+                if flags.contains(.shift) { mods.insert(.shift) }
+                if flags.contains(.control) { mods.insert(.control) }
+                self.capture(code, modifiers: mods)
                 return nil
             case .flagsChanged:
-                // Only the press (flags present), not the release.
-                if KeyNames.isModifier(code),
-                   !event.modifierFlags.intersection([.command, .option, .shift, .control, .function]).isEmpty {
-                    self.capture(code)
-                    return nil
+                guard KeyNames.isModifier(code) else { return event }
+                let anyHeld = !event.modifierFlags
+                    .intersection([.command, .option, .shift, .control, .function]).isEmpty
+                if anyHeld {
+                    self.involvedModifiers.insert(code)
+                } else {
+                    // Everything released without a regular key: a single involved
+                    // modifier means the user chose that modifier as the hotkey.
+                    if self.involvedModifiers.count == 1, let only = self.involvedModifiers.first {
+                        self.capture(only, modifiers: [])
+                    }
+                    self.involvedModifiers = []
                 }
                 return event
             default:
@@ -85,12 +145,13 @@ final class SettingsStore: ObservableObject {
         }
         captureMonitor = nil
         isCapturingShortcut = false
+        involvedModifiers = []
     }
 
-    private func capture(_ keyCode: Int64) {
+    private func capture(_ keyCode: Int64, modifiers: HotkeyModifiers) {
         endShortcutCapture()
-        let preset = HotkeyPreset.custom(keyCode: keyCode)
-        Log.info("shortcut captured: \(preset.displayName) [keyCode \(keyCode)]")
+        let preset = HotkeyPreset.custom(keyCode: keyCode, modifiers: modifiers)
+        Log.info("shortcut captured: \(preset.displayName) [keyCode \(keyCode), modifiers \(modifiers.rawValue)]")
         hotkey = preset
     }
 }
@@ -131,9 +192,70 @@ struct SettingsView: View {
                         .buttonStyle(GhostButtonStyle())
                         Spacer()
                     }
-                    Text("Hold it to talk, or press to start and stop in toggle mode. Bare modifier keys like Right Option work.")
+                    Text("Hold it to talk, or press to start and stop in toggle mode. Combos like \u{2318}K or \u{2318}\u{2325}Space work, and so do bare modifiers like Right Option (press and release it alone while recording).")
                         .font(.system(size: 11))
                         .foregroundStyle(Color.dsFaint)
+                }
+                card {
+                    HStack {
+                        sectionLabel("Microphone priority")
+                        Spacer()
+                        if !store.micPriority.isEmpty {
+                            Button("System Default") { store.resetMicPriority() }
+                                .buttonStyle(GhostButtonStyle())
+                        }
+                    }
+                    if store.connectedMics.isEmpty {
+                        Text("No input devices found")
+                            .font(.system(size: 13))
+                            .foregroundStyle(Color.dsMuted)
+                    }
+                    ForEach(store.connectedMics) { mic in
+                        HStack(spacing: 10) {
+                            Button {
+                                store.promoteMic(mic.uid)
+                            } label: {
+                                Image(systemName: "chevron.up")
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundStyle(Color.dsMuted)
+                                    .frame(width: 26, height: 26)
+                                    .background(Color.dsInk2, in: Circle())
+                                    .overlay(Circle().strokeBorder(Color.dsLine, lineWidth: 1))
+                            }
+                            .buttonStyle(.plain)
+                            .help("Prefer this microphone")
+                            Text(mic.name)
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(Color.dsPaper)
+                            Spacer()
+                            if store.activeMicUID == mic.uid {
+                                tag("Active", color: .dsAccent)
+                            } else if store.activeMicUID == nil, mic.uid == store.connectedMics.first?.uid {
+                                tag("System default", color: .dsMuted)
+                            }
+                        }
+                        .padding(.vertical, 2)
+                    }
+                    Text("Recording binds the highest listed microphone that is connected; unplugged ones are skipped. With no priority set, the system default input is used.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Color.dsFaint)
+                }
+                card {
+                    HStack {
+                        sectionLabel("Learning")
+                        Spacer()
+                        chip(store.learningEnabled ? "On" : "Off", selected: store.learningEnabled) {
+                            store.learningEnabled.toggle()
+                        }
+                    }
+                    Text(store.learnedSummary)
+                        .font(.system(size: 13))
+                        .foregroundStyle(Color.dsMuted)
+                    Text("After each dictation, FreeSpeech watches how you edit the inserted text (locally, via Accessibility) and learns your corrections. A fix seen twice becomes an automatic rule and biases future transcription.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Color.dsFaint)
+                    Button("Reset Learned Corrections") { store.resetLearning() }
+                        .buttonStyle(GhostButtonStyle())
                 }
                 card {
                     sectionLabel("Model")
@@ -195,8 +317,9 @@ struct SettingsView: View {
             }
             .padding(20)
         }
-        .frame(width: 480, height: 620)
+        .frame(width: 480, height: 680)
         .background(Color.dsInk0)
+        .onAppear { store.refresh() }
         .onDisappear { store.endShortcutCapture() }
     }
 
@@ -221,6 +344,17 @@ struct SettingsView: View {
             .overlay(
                 RoundedRectangle(cornerRadius: DS.radiusCard, style: .continuous)
                     .strokeBorder(Color.dsLine, lineWidth: 1))
+    }
+
+    private func tag(_ text: String, color: Color) -> some View {
+        Text(text.uppercased())
+            .font(.system(size: 10, weight: .medium, design: .monospaced))
+            .kerning(1.0)
+            .foregroundStyle(color)
+            .padding(.horizontal, 8)
+            .frame(height: 20)
+            .background(Color.dsInk2, in: Capsule())
+            .overlay(Capsule().strokeBorder(color.opacity(0.4), lineWidth: 1))
     }
 
     private func sectionLabel(_ text: String) -> some View {

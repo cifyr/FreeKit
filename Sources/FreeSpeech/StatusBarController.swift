@@ -121,6 +121,13 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         menu.addItem(ppItem)
         menu.setSubmenu(ppMenu, for: ppItem)
 
+        let splitItem = NSMenuItem(
+            title: "Split Speakers (System Audio)", action: #selector(toggleSplitSpeakers),
+            keyEquivalent: "")
+        splitItem.target = self
+        splitItem.state = settings.splitSpeakersEnabled ? .on : .off
+        menu.addItem(splitItem)
+
         menu.addItem(.separator())
         let undoItem = NSMenuItem(
             title: "Undo Last Dictation", action: #selector(undoLastDictation), keyEquivalent: "")
@@ -162,6 +169,12 @@ final class StatusBarController: NSObject, NSMenuDelegate {
               let mode = PostProcessingMode(rawValue: raw) else { return }
         settings.postProcessing = mode
         Log.info("settings changed: postProcessing=\(mode.rawValue)")
+        onSettingsChanged?()
+    }
+
+    @objc private func toggleSplitSpeakers() {
+        settings.splitSpeakersEnabled.toggle()
+        Log.info("settings changed: splitSpeakers=\(settings.splitSpeakersEnabled)")
         onSettingsChanged?()
     }
 

@@ -258,7 +258,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if AppPaths.modelFile(named: settings.modelName).path != loadedModelPath {
             loadModel()
         }
+        ensureDiarizerModelDownloaded()
         statusBar.update(state: machine.state)
+    }
+
+    // Covers enabling split-speakers from the menu bar, where no settings window
+    // exists to drive the one-time tinydiarize download.
+    private var diarizerDownloadInFlight = false
+    private func ensureDiarizerModelDownloaded() {
+        guard settings.splitSpeakersEnabled, !diarizerDownloadInFlight else { return }
+        let name = FreeSpeechCore.Settings.diarizerModelName
+        let destination = AppPaths.modelFile(named: name)
+        guard !FileManager.default.fileExists(atPath: destination.path) else { return }
+        diarizerDownloadInFlight = true
+        Log.info("split speakers enabled without \(name) on disk, downloading")
+        statusBar.showTransientStatus("Downloading speaker model\u{2026}")
+        modelDownloader.download(
+            modelName: name, to: destination,
+            progress: { [weak self] fraction in
+                DispatchQueue.main.async {
+                    self?.statusBar.showTransientStatus(
+                        "Downloading speaker model\u{2026} \(Int(fraction * 100))%")
+                }
+            },
+            completion: { [weak self] result in
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    self.diarizerDownloadInFlight = false
+                    self.statusBar.showTransientStatus(nil)
+                    if case .failure(let error) = result {
+                        Log.error("speaker model download failed: \(error.localizedDescription)")
+                        self.hud.show(.error("Speaker model download failed — toggle Split Speakers to retry"))
+                    }
+                }
+            })
     }
     private var loadedModelPath: String = ""
 

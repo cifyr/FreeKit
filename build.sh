@@ -67,9 +67,16 @@ cp "$ROOT/Resources/Info.plist" "$APP/Contents/Info.plist"
 # Icon is pre-generated from assets/logo.svg (qlmanage render + iconutil) and
 # committed, so the build has no fragile SVG-rendering dependency.
 cp "$ROOT/Resources/FreeSpeech.icns" "$APP/Contents/Resources/FreeSpeech.icns"
-# Ad-hoc signature: enough for local TCC (mic + accessibility) prompts to work.
-# Note: rebuilding changes the signature, so Accessibility must be re-granted after rebuilds.
-codesign --force --sign - --identifier com.cadenwarren.freespeech "$APP"
+# Prefer the stable "FreeSpeech Dev" self-signed identity when present: TCC ties
+# permissions to the signing certificate, so Accessibility/Screen Recording
+# grants survive rebuilds. Ad-hoc fallback re-prompts after every rebuild.
+if security find-identity -v -p codesigning 2>/dev/null | grep -q "FreeSpeech Dev"; then
+    echo "==> Signing with FreeSpeech Dev identity (permissions persist across rebuilds)"
+    codesign --force --sign "FreeSpeech Dev" --identifier com.cadenwarren.freespeech "$APP"
+else
+    echo "==> Signing ad-hoc (Accessibility must be re-granted after each rebuild)"
+    codesign --force --sign - --identifier com.cadenwarren.freespeech "$APP"
+fi
 
 if [[ "$SKIP_MODEL" -eq 0 ]]; then
     MODEL_FILE="$MODELS_DIR/ggml-$MODEL_NAME.bin"

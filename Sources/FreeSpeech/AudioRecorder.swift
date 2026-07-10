@@ -3,6 +3,8 @@ import FreeSpeechCore
 
 enum AudioRecorderError: LocalizedError {
     case noInputDevice
+    case deviceInputFailed(String, Error)
+    case sessionRejectedDevice(String)
     case engineStartFailed(Error)
     case converterInitFailed
 
@@ -10,6 +12,10 @@ enum AudioRecorderError: LocalizedError {
         switch self {
         case .noInputDevice:
             return "No audio input device available"
+        case .deviceInputFailed(let name, let err):
+            return "Cannot open microphone \"\(name)\": \(err.localizedDescription)"
+        case .sessionRejectedDevice(let name):
+            return "Capture session rejected microphone \"\(name)\""
         case .engineStartFailed(let err):
             return "Audio engine failed to start: \(err.localizedDescription)"
         case .converterInitFailed:
@@ -18,70 +24,81 @@ enum AudioRecorderError: LocalizedError {
     }
 }
 
-// Captures the default input device and accumulates 16 kHz mono Float32 samples.
-final class AudioRecorder {
-    var onLevel: ((Float) -> Void)?
+// Microphone capture via AVCaptureSession: device selection is first-class
+// (AVAudioEngine's device binding negotiated stale formats on Bluetooth mics,
+// error -10868 / starved taps) and buffers arrive as CMSampleBuffers that the
+// shared accumulator resamples to 16 kHz mono.
+final class AudioRecorder: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate {
+    var onLevel: ((Float) -> Void)? {
+        get { accumulator.onLevel }
+        set { accumulator.onLevel = newValue }
+    }
     var onMaxDuration: (() -> Void)?
 
-    private var engine: AVAudioEngine?
-    private var converter: AVAudioConverter?
-    private var samples: [Float] = []
-    private let lock = NSLock()
+    private let accumulator = PCMSampleAccumulator()
+    private var session: AVCaptureSession?
     private var maxDurationTimer: DispatchWorkItem?
+    private let sampleQueue = DispatchQueue(label: "com.cadenwarren.freespeech.micsamples")
     private(set) var isRecording = false
 
-    private static let targetFormat = AVAudioFormat(
-        commonFormat: .pcmFormatFloat32,
-        sampleRate: Double(WhisperCppEngine.sampleRate),
-        channels: 1, interleaved: false)!
-
-    func start(maxSeconds: Double, device: AudioInputDevice? = nil) throws {
+    func start(maxSeconds: Double, device preferred: AudioInputDevice? = nil) throws {
         precondition(!isRecording, "start called while already recording")
 
-        // Fresh engine per session: survives default-device changes between dictations.
-        let engine = AVAudioEngine()
-        let input = engine.inputNode
-        if let device {
-            // Bind the user's preferred mic instead of the system default input.
-            var deviceID = device.deviceID
-            let status = AudioUnitSetProperty(
-                input.audioUnit!, kAudioOutputUnitProperty_CurrentDevice,
-                kAudioUnitScope_Global, 0, &deviceID,
-                UInt32(MemoryLayout<AudioDeviceID>.size))
-            if status != noErr {
-                Log.error("could not bind preferred mic \"\(device.name)\" (status \(status)), falling back to system default")
+        var device: AVCaptureDevice?
+        if let preferred {
+            // AVCaptureDevice uniqueIDs are the CoreAudio device UIDs we store.
+            device = AVCaptureDevice(uniqueID: preferred.uid)
+            if device == nil {
+                Log.error("preferred mic \"\(preferred.name)\" [\(preferred.uid)] not visible to AVCapture, falling back to default input")
             } else {
-                Log.info("recording using preferred mic: \(device.name) [\(device.uid)]")
+                Log.info("recording using preferred mic: \(preferred.name) [\(preferred.uid)]")
             }
         }
-        // inputFormat(forBus:) reflects the hardware AFTER the device bind above;
-        // outputFormat can report the previous (default) device's format, which
-        // made non-default mics deliver audio the converter mis-resampled.
-        let inputFormat = input.inputFormat(forBus: 0)
-        Log.info("recording start: input format \(inputFormat.sampleRate)Hz \(inputFormat.channelCount)ch, max \(Int(maxSeconds))s")
-        guard inputFormat.sampleRate > 0, inputFormat.channelCount > 0 else {
+        guard let resolved = device ?? AVCaptureDevice.default(for: .audio) else {
             throw AudioRecorderError.noInputDevice
         }
+        Log.info("recording start: device \"\(resolved.localizedName)\", max \(Int(maxSeconds))s")
 
-        lock.lock()
-        samples.removeAll(keepingCapacity: true)
-        lock.unlock()
-        // Converter is created lazily from the first buffer's actual format:
-        // the only description guaranteed to match what the tap delivers.
-        self.converter = nil
-
-        input.installTap(onBus: 0, bufferSize: 2048, format: nil) { [weak self] buffer, _ in
-            self?.process(buffer: buffer)
-        }
-        engine.prepare()
+        let session = AVCaptureSession()
+        let input: AVCaptureDeviceInput
         do {
-            try engine.start()
+            input = try AVCaptureDeviceInput(device: resolved)
         } catch {
-            input.removeTap(onBus: 0)
-            throw AudioRecorderError.engineStartFailed(error)
+            throw AudioRecorderError.deviceInputFailed(resolved.localizedName, error)
         }
-        self.engine = engine
+        guard session.canAddInput(input) else {
+            throw AudioRecorderError.sessionRejectedDevice(resolved.localizedName)
+        }
+        session.addInput(input)
+
+        let output = AVCaptureAudioDataOutput()
+        // Ask for whisper's format up front; the accumulator still converts if
+        // the session delivers something else.
+        output.audioSettings = [
+            AVFormatIDKey: kAudioFormatLinearPCM,
+            AVSampleRateKey: 16_000.0,
+            AVNumberOfChannelsKey: 1,
+            AVLinearPCMBitDepthKey: 32,
+            AVLinearPCMIsFloatKey: true,
+            AVLinearPCMIsBigEndianKey: false,
+            AVLinearPCMIsNonInterleaved: true,
+        ]
+        guard session.canAddOutput(output) else {
+            throw AudioRecorderError.sessionRejectedDevice(resolved.localizedName)
+        }
+        session.addOutput(output)
+        output.setSampleBufferDelegate(self, queue: sampleQueue)
+
+        accumulator.reset()
+        self.session = session
         isRecording = true
+
+        // startRunning blocks while the device spins up (Bluetooth can take a
+        // few hundred ms); off the main thread so the HUD appears instantly.
+        DispatchQueue.global(qos: .userInitiated).async {
+            session.startRunning()
+            Log.info("capture session running: \(session.isRunning)")
+        }
 
         let timer = DispatchWorkItem { [weak self] in
             guard let self, self.isRecording else { return }
@@ -99,58 +116,23 @@ final class AudioRecorder {
         maxDurationTimer = nil
         guard isRecording else { return [] }
         isRecording = false
-        engine?.inputNode.removeTap(onBus: 0)
-        engine?.stop()
-        engine = nil
-        converter = nil
-        lock.lock()
-        let result = samples
-        samples.removeAll()
-        lock.unlock()
+        if let session {
+            DispatchQueue.global(qos: .userInitiated).async {
+                session.stopRunning()
+            }
+        }
+        session = nil
+        let result = accumulator.drain()
         Log.info("recording stop: \(result.count) samples (\(String(format: "%.1f", Double(result.count) / Double(WhisperCppEngine.sampleRate)))s)")
+        if result.isEmpty {
+            Log.error("recording produced zero samples — capture session delivered no buffers")
+        }
         return result
     }
 
-    private func process(buffer: AVAudioPCMBuffer) {
-        if converter == nil {
-            Log.info("recording buffer format: \(buffer.format.sampleRate)Hz \(buffer.format.channelCount)ch")
-            converter = AVAudioConverter(from: buffer.format, to: Self.targetFormat)
-            if converter == nil {
-                Log.error("cannot convert \(buffer.format.sampleRate)Hz \(buffer.format.channelCount)ch to 16kHz mono")
-                return
-            }
-        }
-        guard let converter else { return }
-
-        if let data = buffer.floatChannelData?[0], buffer.frameLength > 0 {
-            var sum: Float = 0
-            for i in 0..<Int(buffer.frameLength) { sum += data[i] * data[i] }
-            let rms = (sum / Float(buffer.frameLength)).squareRoot()
-            onLevel?(rms)
-        }
-
-        let ratio = Self.targetFormat.sampleRate / buffer.format.sampleRate
-        let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 32
-        guard let out = AVAudioPCMBuffer(pcmFormat: Self.targetFormat, frameCapacity: capacity) else { return }
-
-        var fed = false
-        var error: NSError?
-        let status = converter.convert(to: out, error: &error) { _, inputStatus in
-            if fed {
-                inputStatus.pointee = .noDataNow
-                return nil
-            }
-            fed = true
-            inputStatus.pointee = .haveData
-            return buffer
-        }
-        if status == .error {
-            Log.error("audio conversion failed: \(error?.localizedDescription ?? "unknown")")
-            return
-        }
-        guard let channel = out.floatChannelData?[0], out.frameLength > 0 else { return }
-        lock.lock()
-        samples.append(contentsOf: UnsafeBufferPointer(start: channel, count: Int(out.frameLength)))
-        lock.unlock()
+    func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer,
+                       from connection: AVCaptureConnection) {
+        guard isRecording else { return }
+        accumulator.ingest(sampleBuffer)
     }
 }

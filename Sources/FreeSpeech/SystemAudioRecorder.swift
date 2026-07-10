@@ -23,30 +23,23 @@ enum SystemAudioError: LocalizedError {
 // Mac plays) via ScreenCaptureKit's audio tap — no virtual audio driver needed.
 // Mirrors AudioRecorder's contract: accumulate 16 kHz mono floats, RMS levels out.
 final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
-    var onLevel: ((Float) -> Void)?
+    var onLevel: ((Float) -> Void)? {
+        get { accumulator.onLevel }
+        set { accumulator.onLevel = newValue }
+    }
     var onMaxDuration: (() -> Void)?
 
+    private let accumulator = PCMSampleAccumulator()
     private var stream: SCStream?
-    private var converter: AVAudioConverter?
-    private var samples: [Float] = []
-    private let lock = NSLock()
     private var maxDurationTimer: DispatchWorkItem?
     private let sampleQueue = DispatchQueue(label: "com.cadenwarren.freespeech.sysaudio")
     private(set) var isRecording = false
-
-    private static let targetFormat = AVAudioFormat(
-        commonFormat: .pcmFormatFloat32,
-        sampleRate: Double(WhisperCppEngine.sampleRate),
-        channels: 1, interleaved: false)!
 
     // SCStream setup is async (shareable-content lookup); the completion fires on
     // the main queue. On any failure the recorder is left fully stopped.
     func start(maxSeconds: Double, completion: @escaping (Error?) -> Void) {
         precondition(!isRecording, "start called while already recording")
-        lock.lock()
-        samples.removeAll(keepingCapacity: true)
-        lock.unlock()
-        converter = nil
+        accumulator.reset()
         isRecording = true
         Log.info("system audio capture starting, max \(Int(maxSeconds))s")
 
@@ -108,11 +101,7 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
             Task { try? await stream.stopCapture() }
         }
         stream = nil
-        converter = nil
-        lock.lock()
-        let result = samples
-        samples.removeAll()
-        lock.unlock()
+        let result = accumulator.drain()
         Log.info("system audio capture stop: \(result.count) samples (\(String(format: "%.1f", Double(result.count) / Double(WhisperCppEngine.sampleRate)))s)")
         return result
     }
@@ -121,61 +110,12 @@ final class SystemAudioRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer,
                 of type: SCStreamOutputType) {
-        guard type == .audio, isRecording, sampleBuffer.isValid else { return }
-        guard let desc = CMSampleBufferGetFormatDescription(sampleBuffer) else { return }
-        let format = AVAudioFormat(cmAudioFormatDescription: desc)
-
-        try? sampleBuffer.withAudioBufferList { audioBufferList, _ in
-            guard let pcm = AVAudioPCMBuffer(
-                pcmFormat: format, bufferListNoCopy: audioBufferList.unsafePointer) else { return }
-            process(buffer: pcm)
-        }
+        guard type == .audio, isRecording else { return }
+        accumulator.ingest(sampleBuffer)
     }
 
     func stream(_ stream: SCStream, didStopWithError error: Error) {
         Log.error("system audio stream stopped by system: \(error.localizedDescription)")
         _ = stop()
-    }
-
-    private func process(buffer: AVAudioPCMBuffer) {
-        if let data = buffer.floatChannelData?[0], buffer.frameLength > 0 {
-            var sum: Float = 0
-            for i in 0..<Int(buffer.frameLength) { sum += data[i] * data[i] }
-            let rms = (sum / Float(buffer.frameLength)).squareRoot()
-            onLevel?(rms)
-        }
-
-        if converter == nil {
-            converter = AVAudioConverter(from: buffer.format, to: Self.targetFormat)
-            if converter == nil {
-                Log.error("system audio: cannot convert \(buffer.format.sampleRate)Hz \(buffer.format.channelCount)ch to 16kHz mono")
-                return
-            }
-        }
-        guard let converter else { return }
-
-        let ratio = Self.targetFormat.sampleRate / buffer.format.sampleRate
-        let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 32
-        guard let out = AVAudioPCMBuffer(pcmFormat: Self.targetFormat, frameCapacity: capacity) else { return }
-
-        var fed = false
-        var error: NSError?
-        let status = converter.convert(to: out, error: &error) { _, inputStatus in
-            if fed {
-                inputStatus.pointee = .noDataNow
-                return nil
-            }
-            fed = true
-            inputStatus.pointee = .haveData
-            return buffer
-        }
-        if status == .error {
-            Log.error("system audio conversion failed: \(error?.localizedDescription ?? "unknown")")
-            return
-        }
-        guard let channel = out.floatChannelData?[0], out.frameLength > 0 else { return }
-        lock.lock()
-        samples.append(contentsOf: UnsafeBufferPointer(start: channel, count: Int(out.frameLength)))
-        lock.unlock()
     }
 }

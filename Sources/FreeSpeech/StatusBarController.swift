@@ -121,12 +121,6 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         menu.addItem(ppItem)
         menu.setSubmenu(ppMenu, for: ppItem)
 
-        let clipItem = NSMenuItem(
-            title: "Keep transcript on clipboard", action: #selector(toggleClipboard), keyEquivalent: "")
-        clipItem.target = self
-        clipItem.state = settings.copyToClipboard ? .on : .off
-        menu.addItem(clipItem)
-
         menu.addItem(.separator())
         let undoItem = NSMenuItem(
             title: "Undo Last Dictation", action: #selector(undoLastDictation), keyEquivalent: "")
@@ -168,12 +162,6 @@ final class StatusBarController: NSObject, NSMenuDelegate {
               let mode = PostProcessingMode(rawValue: raw) else { return }
         settings.postProcessing = mode
         Log.info("settings changed: postProcessing=\(mode.rawValue)")
-        onSettingsChanged?()
-    }
-
-    @objc private func toggleClipboard() {
-        settings.copyToClipboard.toggle()
-        Log.info("settings changed: copyToClipboard=\(settings.copyToClipboard)")
         onSettingsChanged?()
     }
 

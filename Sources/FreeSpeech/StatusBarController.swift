@@ -85,19 +85,6 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         menu.addItem(modeItem)
         menu.setSubmenu(modeMenu, for: modeItem)
 
-        let hotkeyMenu = NSMenu()
-        for preset in HotkeyPreset.all {
-            let item = NSMenuItem(
-                title: preset.displayName, action: #selector(selectHotkey(_:)), keyEquivalent: "")
-            item.target = self
-            item.representedObject = preset.id
-            item.state = settings.hotkey == preset ? .on : .off
-            hotkeyMenu.addItem(item)
-        }
-        let hotkeyItem = NSMenuItem(title: "Hotkey", action: nil, keyEquivalent: "")
-        menu.addItem(hotkeyItem)
-        menu.setSubmenu(hotkeyMenu, for: hotkeyItem)
-
         let micMenu = NSMenu()
         // Empty UID represents "system default input"; matches Settings.micPriority == [].
         let selectedUID = settings.micPriority.first ?? ""
@@ -178,14 +165,6 @@ final class StatusBarController: NSObject, NSMenuDelegate {
               let mode = ActivationMode(rawValue: raw) else { return }
         settings.mode = mode
         Log.info("settings changed: mode=\(mode.rawValue)")
-        onSettingsChanged?()
-    }
-
-    @objc private func selectHotkey(_ sender: NSMenuItem) {
-        guard let id = sender.representedObject as? String,
-              let preset = HotkeyPreset.find(id: id) else { return }
-        settings.hotkey = preset
-        Log.info("settings changed: hotkey=\(preset.id)")
         onSettingsChanged?()
     }
 

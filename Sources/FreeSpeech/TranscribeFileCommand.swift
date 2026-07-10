@@ -31,6 +31,7 @@ enum TranscribeFileCommand {
         if let i = arguments.firstIndex(of: "--language"), arguments.count > i + 1 {
             language = arguments[i + 1]
         }
+        let splitSpeakers = arguments.contains("--split-speakers")
 
         do {
             let samples = try loadSamples(path: path)
@@ -51,7 +52,30 @@ enum TranscribeFileCommand {
                 best = min(best, CFAbsoluteTimeGetCurrent() - start)
             }
 
-            let cleaned = TranscriptCleaner.clean(raw) ?? ""
+            var cleaned = TranscriptCleaner.clean(raw) ?? ""
+            if splitSpeakers {
+                let segments = try engine.transcribeSegments(
+                    samples: samples, timeout: 120, beamSize: beamSize,
+                    vocabularyHint: vocabularyHint, language: language,
+                    detectSpeakerTurns: false)
+                let diarizer = WhisperCppEngine()
+                let turnStart = CFAbsoluteTimeGetCurrent()
+                try diarizer.loadModel(
+                    at: AppPaths.modelFile(named: Settings.diarizerModelName))
+                let turnSegments = try diarizer.transcribeSegments(
+                    samples: samples, timeout: 120, beamSize: 1,
+                    vocabularyHint: nil, language: "en", detectSpeakerTurns: true)
+                let turns = turnSegments.filter(\.speakerTurnNext).map(\.end)
+                print(String(format: "diarize_pass_s: %.3f", CFAbsoluteTimeGetCurrent() - turnStart))
+                for s in turnSegments {
+                    print(String(format: "tdrz_segment: %.2f-%.2f turn=%@ %@",
+                                 s.start, s.end, s.speakerTurnNext ? "YES" : "no", s.text))
+                }
+                print("turns: \(turns.map { String(format: "%.2f", $0) }.joined(separator: ", "))")
+                cleaned = TranscriptCleaner.cleanPreservingLines(SpeakerSplitter.merged(
+                    segments: segments.map { TimedSegment(start: $0.start, text: $0.text) },
+                    turnTimes: turns)) ?? ""
+            }
             print("model: \(modelName)")
             print("beam_size: \(beamSize)")
             print(String(format: "model_load_s: %.3f", loadTime))

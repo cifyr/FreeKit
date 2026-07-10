@@ -25,10 +25,19 @@ final class ModelDownloader: NSObject, URLSessionDownloadDelegate {
     private var destination: URL?
     private lazy var session = URLSession(configuration: .default, delegate: self, delegateQueue: nil)
 
+    // tinydiarize models are hosted by their author, not in ggerganov's repo
+    // (mirrors whisper.cpp's own download-ggml-model.sh).
+    static func url(for modelName: String) -> URL? {
+        let base = modelName.contains("tdrz")
+            ? "https://huggingface.co/akashmjn/tinydiarize-whisper.cpp/resolve/main"
+            : baseURL
+        return URL(string: "\(base)/ggml-\(modelName).bin")
+    }
+
     func download(modelName: String, to destination: URL,
                   progress: @escaping (Double) -> Void,
                   completion: @escaping (Result<URL, Error>) -> Void) {
-        guard let url = URL(string: "\(Self.baseURL)/ggml-\(modelName).bin") else {
+        guard let url = Self.url(for: modelName) else {
             completion(.failure(ModelDownloadError.badModelName(modelName)))
             return
         }

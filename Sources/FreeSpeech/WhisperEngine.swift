@@ -25,11 +25,20 @@ enum TranscriptionError: LocalizedError {
     }
 }
 
+struct EngineSegment {
+    let start: Double
+    let end: Double
+    let text: String
+    // Only meaningful when the loaded model supports tinydiarize (small.en-tdrz).
+    let speakerTurnNext: Bool
+}
+
 // Small interface so the engine can be swapped without touching capture/insert code.
 protocol TranscriptionEngine: AnyObject {
     var isLoaded: Bool { get }
     func loadModel(at url: URL) throws
     func transcribe(samples: [Float], timeout: TimeInterval, beamSize: Int, vocabularyHint: String?, language: String) throws -> String
+    func transcribeSegments(samples: [Float], timeout: TimeInterval, beamSize: Int, vocabularyHint: String?, language: String, detectSpeakerTurns: Bool) throws -> [EngineSegment]
 }
 
 private final class AbortBox {
@@ -68,6 +77,13 @@ final class WhisperCppEngine: TranscriptionEngine {
     }
 
     func transcribe(samples: [Float], timeout: TimeInterval, beamSize: Int, vocabularyHint: String?, language: String) throws -> String {
+        try transcribeSegments(
+            samples: samples, timeout: timeout, beamSize: beamSize,
+            vocabularyHint: vocabularyHint, language: language, detectSpeakerTurns: false)
+            .map(\.text).joined()
+    }
+
+    func transcribeSegments(samples: [Float], timeout: TimeInterval, beamSize: Int, vocabularyHint: String?, language: String, detectSpeakerTurns: Bool) throws -> [EngineSegment] {
         guard let ctx else { throw TranscriptionError.notLoaded }
 
         // whisper.cpp requires at least ~1s of audio; pad short clips with silence.
@@ -89,6 +105,7 @@ final class WhisperCppEngine: TranscriptionEngine {
         params.translate = false
         params.no_context = true
         params.suppress_blank = true
+        params.tdrz_enable = detectSpeakerTurns
         params.n_threads = Int32(max(2, min(8, ProcessInfo.processInfo.activeProcessorCount)))
 
         // Vocabulary bias: whisper conditions its decoder on this as if it preceded
@@ -124,13 +141,19 @@ final class WhisperCppEngine: TranscriptionEngine {
             throw TranscriptionError.whisperFailed(status)
         }
 
-        var text = ""
+        var segments: [EngineSegment] = []
         for i in 0..<whisper_full_n_segments(ctx) {
-            if let seg = whisper_full_get_segment_text(ctx, i) {
-                text += String(cString: seg)
-            }
+            guard let seg = whisper_full_get_segment_text(ctx, i) else { continue }
+            // Segment timestamps are in centiseconds.
+            segments.append(EngineSegment(
+                start: Double(whisper_full_get_segment_t0(ctx, i)) / 100.0,
+                end: Double(whisper_full_get_segment_t1(ctx, i)) / 100.0,
+                text: String(cString: seg),
+                speakerTurnNext: detectSpeakerTurns
+                    && whisper_full_get_segment_speaker_turn_next(ctx, i)))
         }
-        Log.info(String(format: "transcription done in %.2fs: \"%@\"", elapsed, text))
-        return text
+        Log.info(String(format: "transcription done in %.2fs (%d segments): \"%@\"",
+                        elapsed, segments.count, segments.map(\.text).joined()))
+        return segments
     }
 }

@@ -101,6 +101,7 @@ public final class Settings {
         static let soundCuesEnabled = "soundCuesEnabled"
         static let hudPosition = "hudPosition"
         static let appProfiles = "appPostProcessingProfiles"
+        static let splitSpeakers = "splitSpeakersEnabled"
         static let onboarded = "hasCompletedOnboarding"
     }
 
@@ -198,6 +199,17 @@ public final class Settings {
     public var language: String {
         get { defaults.string(forKey: Key.language) ?? "en" }
         set { defaults.set(newValue, forKey: Key.language) }
+    }
+
+    // The only ggml model with tinydiarize speaker-turn tokens.
+    public static let diarizerModelName = "small.en-tdrz"
+
+    // System-audio captures only: breaks the transcript into lines at detected
+    // voice changes via a second tinydiarize pass. Costs roughly one extra
+    // transcription's latency; text accuracy is unaffected.
+    public var splitSpeakersEnabled: Bool {
+        get { defaults.object(forKey: Key.splitSpeakers) as? Bool ?? false }
+        set { defaults.set(newValue, forKey: Key.splitSpeakers) }
     }
 
     public var soundCuesEnabled: Bool {

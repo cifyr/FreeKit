@@ -18,4 +18,12 @@ public enum TranscriptCleaner {
         // knows the caret context; capitalizing here would fight continuations.
         return text
     }
+
+    // For speaker-split transcripts: line breaks are the speaker turns and must
+    // survive cleanup, so each line is cleaned independently.
+    public static func cleanPreservingLines(_ raw: String) -> String? {
+        let lines = raw.components(separatedBy: "\n").compactMap { clean($0) }
+        let joined = lines.joined(separator: "\n")
+        return joined.isEmpty ? nil : joined
+    }
 }

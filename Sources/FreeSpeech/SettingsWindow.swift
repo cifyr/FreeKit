@@ -71,6 +71,14 @@ final class SettingsStore: ObservableObject {
     @Published var appProfiles: [(bundleID: String, appName: String, mode: PostProcessingMode)] = []
     @Published var launchAtLogin: Bool = false
     @Published var selectedTab: SettingsTab = .general
+    @Published var splitSpeakers: Bool {
+        didSet {
+            settings.splitSpeakersEnabled = splitSpeakers
+            if splitSpeakers { ensureDiarizerModel() }
+        }
+    }
+    @Published var diarizerStatus: String = ""
+    private let diarizerDownloader = ModelDownloader()
 
     let updates: UpdateManager
 
@@ -102,7 +110,39 @@ final class SettingsStore: ObservableObject {
         _language = Published(initialValue: settings.language)
         _soundCuesEnabled = Published(initialValue: settings.soundCuesEnabled)
         _hudPosition = Published(initialValue: settings.hudPosition)
+        _splitSpeakers = Published(initialValue: settings.splitSpeakersEnabled)
         refresh()
+    }
+
+    // The tinydiarize model is fetched once, the first time the toggle goes on.
+    private func ensureDiarizerModel() {
+        let name = FreeSpeechCore.Settings.diarizerModelName
+        let destination = AppPaths.modelFile(named: name)
+        guard !FileManager.default.fileExists(atPath: destination.path) else {
+            diarizerStatus = ""
+            return
+        }
+        diarizerStatus = "Downloading speaker model (one-time, ~490 MB)\u{2026}"
+        diarizerDownloader.download(
+            modelName: name, to: destination,
+            progress: { [weak self] fraction in
+                DispatchQueue.main.async {
+                    self?.diarizerStatus = "Downloading speaker model\u{2026} \(Int(fraction * 100))%"
+                }
+            },
+            completion: { [weak self] result in
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    switch result {
+                    case .success:
+                        self.diarizerStatus = "Speaker model installed."
+                    case .failure(let error):
+                        Log.error("diarizer model download failed: \(error.localizedDescription)")
+                        self.diarizerStatus = "Download failed: \(error.localizedDescription)"
+                        self.splitSpeakers = false
+                    }
+                }
+            })
     }
 
     func refresh() {
@@ -326,6 +366,27 @@ struct SettingsView: View {
         micPriorityCard
         modelCard
         languageCard
+        splitSpeakersCard
+    }
+
+    @ViewBuilder private var splitSpeakersCard: some View {
+                card {
+                    HStack {
+                        sectionLabel("Split speakers (system audio)")
+                        Spacer()
+                        chip(store.splitSpeakers ? "On" : "Off", selected: store.splitSpeakers) {
+                            store.splitSpeakers.toggle()
+                        }
+                    }
+                    Text("System-audio captures get a line break whenever the voice changes — each speaker on their own line. Uses a second on-device pass, adding roughly one transcription's latency. English-focused. Rewrite modes are skipped for split transcripts.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Color.dsFaint)
+                    if !store.diarizerStatus.isEmpty {
+                        Text(store.diarizerStatus)
+                            .font(.system(size: 12))
+                            .foregroundStyle(Color.dsMuted)
+                    }
+                }
     }
 
     @ViewBuilder private var textTab: some View {

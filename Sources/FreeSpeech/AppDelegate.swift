@@ -11,6 +11,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // Which capture the current session uses; the machine guards cross-source events.
     private var activeSource: AudioSource = .microphone
     private let engine: TranscriptionEngine = WhisperCppEngine()
+    // Second engine for the tinydiarize pass; loaded lazily, only ever used for
+    // speaker-turn timestamps (its transcript text is discarded).
+    private let diarizer: TranscriptionEngine = WhisperCppEngine()
     private let inserter = TextInserter()
     private let postProcessor = PostProcessor()
     private let modelDownloader = ModelDownloader()
@@ -374,15 +377,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 if !screenTerms.isEmpty {
                     hint += " " + screenTerms.joined(separator: ", ") + "."
                 }
-                let raw = try self.engine.transcribe(
-                    samples: samples, timeout: Self.transcriptionTimeout,
-                    beamSize: 1, vocabularyHint: hint, language: self.settings.language)
+                let raw: String
+                let splitSpeakers = self.activeSource == .systemAudio
+                    && self.settings.splitSpeakersEnabled
+                    && self.ensureDiarizerLoaded()
+                if splitSpeakers {
+                    // Two passes: the accurate model for text, tinydiarize only
+                    // for the times where the voice changes.
+                    let segments = try self.engine.transcribeSegments(
+                        samples: samples, timeout: Self.transcriptionTimeout,
+                        beamSize: 1, vocabularyHint: hint,
+                        language: self.settings.language, detectSpeakerTurns: false)
+                    let turnSegments = try self.diarizer.transcribeSegments(
+                        samples: samples, timeout: Self.transcriptionTimeout,
+                        beamSize: 1, vocabularyHint: nil,
+                        language: "en", detectSpeakerTurns: true)
+                    let turns = turnSegments.filter(\.speakerTurnNext).map(\.end)
+                    Log.info("speaker split: \(turns.count) turn(s) detected across \(segments.count) segments")
+                    raw = SpeakerSplitter.merged(
+                        segments: segments.map { TimedSegment(start: $0.start, text: $0.text) },
+                        turnTimes: turns)
+                } else {
+                    raw = try self.engine.transcribe(
+                        samples: samples, timeout: Self.transcriptionTimeout,
+                        beamSize: 1, vocabularyHint: hint, language: self.settings.language)
+                }
                 // Per-app profile: the app being dictated into can override the mode.
                 let mode = self.settings.postProcessing(forApp: self.pendingTargetBundleID)
                 // "Do nothing" means raw whisper output, only trimmed so pasting is sane.
                 var text: String? = mode == .off
                     ? raw.trimmingCharacters(in: .whitespacesAndNewlines)
-                    : TranscriptCleaner.clean(raw)
+                    : (splitSpeakers
+                        ? TranscriptCleaner.cleanPreservingLines(raw)
+                        : TranscriptCleaner.clean(raw))
                 if let t = text, mode != .off {
                     // Deterministic transforms, all effectively free: learned rules,
                     // the user's dictionary, filler removal, then spoken commands
@@ -400,8 +427,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
                 if text?.isEmpty == true { text = nil }
                 if let cleaned = text, mode.needsLanguageModel {
-                    DispatchQueue.main.async { self.hud.show(.processing) }
-                    text = self.postProcessor.process(cleaned, mode: mode, tone: self.settings.tone)
+                    if splitSpeakers {
+                        // Rewrites would merge lines and lose the speaker turns.
+                        Log.info("skipping \(mode.rawValue) rewrite for speaker-split transcript")
+                    } else {
+                        DispatchQueue.main.async { self.hud.show(.processing) }
+                        text = self.postProcessor.process(cleaned, mode: mode, tone: self.settings.tone)
+                    }
                 }
                 let result = text
                 DispatchQueue.main.async { self.finish(transcript: result, stoppedAt: stoppedAt) }
@@ -412,6 +444,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         .transcriptionFailed(error.localizedDescription), mode: self.settings.mode))
                 }
             }
+        }
+    }
+
+    // Loads the tinydiarize model once, on the whisper queue. Missing model or
+    // load failure degrades to an unsplit transcript, never a failed dictation.
+    private func ensureDiarizerLoaded() -> Bool {
+        if diarizer.isLoaded { return true }
+        let url = AppPaths.modelFile(named: FreeSpeechCore.Settings.diarizerModelName)
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            Log.error("split speakers enabled but \(url.lastPathComponent) is missing — re-toggle the setting to download it")
+            return false
+        }
+        do {
+            try diarizer.loadModel(at: url)
+            return true
+        } catch {
+            Log.error("diarizer model load failed: \(error.localizedDescription)")
+            return false
         }
     }
 

@@ -99,10 +99,14 @@ final class SpeechModule: NSObject, AppModule {
         statusBar?.setVisible(visible)
     }
 
+    // Speech predates the suite and keeps its original tabbed settings window.
+    func openSettings() {
+        guard activated else { return }
+        settingsWindow.show()
+    }
+
     func makeSettingsPane() -> AnyView {
-        AnyView(SpeechSettingsPane(openFullSettings: { [weak self] in
-            self?.settingsWindow.show()
-        }))
+        AnyView(EmptyView())
     }
 
     // MARK: - Runtime construction (once, on first activate)
@@ -595,23 +599,6 @@ final class SpeechModule: NSObject, AppModule {
         default:
             hud.show(.error(message))
             statusBar.update(state: .error(message))
-        }
-    }
-}
-
-// The full Speech configuration predates the suite and lives in its own tabbed
-// window; the card pane just links to it.
-private struct SpeechSettingsPane: View {
-    let openFullSettings: () -> Void
-
-    var body: some View {
-        HStack {
-            Text("Dictation, hotkeys, rewrite, and history live in the Speech settings window.")
-                .font(.system(size: 11))
-                .foregroundStyle(Color.dsMuted)
-            Spacer()
-            Button("Open Speech Settings\u{2026}") { openFullSettings() }
-                .buttonStyle(GhostButtonStyle())
         }
     }
 }

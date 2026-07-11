@@ -6,6 +6,14 @@ import FreeSpeechCore
 // the bare name to ours once for the whole target.
 typealias Settings = FreeSpeechCore.Settings
 
+// Where a module's settings live: rich tools get their own window, tools with
+// one or two simple controls stay inline in the control-center card.
+enum ModuleSettingsStyle {
+    case window
+    case inline
+    case none
+}
+
 // App-side lifecycle counterpart of ModuleInfo. Modules construct their runtime
 // pieces lazily in activate() so a disabled tool costs nothing at launch.
 protocol AppModule: AnyObject {
@@ -14,8 +22,16 @@ protocol AppModule: AnyObject {
     func deactivate()
     // Only called on ownsMenuBarItem modules, and only while active.
     func setMenuBarItemVisible(_ visible: Bool)
-    // Inline settings pane rendered inside the module's control-center card.
+    var settingsStyle: ModuleSettingsStyle { get }
+    // Settings content: hosted in the module's own window (.window) or inside
+    // the control-center card (.inline).
     func makeSettingsPane() -> AnyView
+    func openSettings()
+}
+
+extension AppModule {
+    var settingsStyle: ModuleSettingsStyle { .window }
+    func openSettings() {}
 }
 
 // Coming-soon tools: real catalog entry, greyed-out card, zero runtime behavior.
@@ -29,6 +45,7 @@ final class PlaceholderModule: AppModule {
     func activate() {}
     func deactivate() {}
     func setMenuBarItemVisible(_ visible: Bool) {}
+    var settingsStyle: ModuleSettingsStyle { .none }
     func makeSettingsPane() -> AnyView { AnyView(EmptyView()) }
 }
 

@@ -24,6 +24,14 @@ final class StatsFormattingTests: XCTestCase {
         XCTAssertEqual(StatsFormatting.percent(-0.2), "0%")
     }
 
+    func testUptimeUsesTwoMostSignificantUnits() {
+        XCTAssertEqual(StatsFormatting.uptime(59), "0m")
+        XCTAssertEqual(StatsFormatting.uptime(35 * 60), "35m")
+        XCTAssertEqual(StatsFormatting.uptime(3 * 3600 + 4 * 60), "3h 4m")
+        XCTAssertEqual(StatsFormatting.uptime(2 * 86_400 + 5 * 3600 + 30 * 60), "2d 5h")
+        XCTAssertEqual(StatsFormatting.uptime(-10), "0m")
+    }
+
     func testThroughputDelta() {
         XCTAssertEqual(StatsFormatting.throughput(previous: 1000, current: 3000, seconds: 2), 1000)
         // Counter reset (interface bounced) must clamp to zero, not go negative.

@@ -42,6 +42,10 @@ final class CapsLockModule: AppModule, EventRewriter {
 
     func setMenuBarItemVisible(_ visible: Bool) {}
 
+    // A single chip row: stays inline in the control-center card instead of
+    // opening a whole window.
+    var settingsStyle: ModuleSettingsStyle { .inline }
+
     func makeSettingsPane() -> AnyView {
         AnyView(CapsLockSettingsPane(
             current: mapper.behavior,

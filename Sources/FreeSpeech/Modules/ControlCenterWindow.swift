@@ -177,24 +177,46 @@ private struct ModuleCard: View {
                         .opacity(enabled ? 1 : 0.4)
                         .disabled(!enabled)
                     }
-                    Button {
-                        onToggleExpanded()
-                    } label: {
-                        Image(systemName: "chevron.down")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(Color.dsMuted)
-                            .rotationEffect(.degrees(expanded ? 180 : 0))
-                            .frame(width: 26, height: 26)
-                            .background(
-                                hovering ? Color(nsColor: DS.controlHover) : Color.clear,
-                                in: Circle())
+                    // Rich tools open their own settings window; simple ones
+                    // (Caps Lock) disclose the few controls right here.
+                    switch registry.module(id: info.id)?.settingsStyle {
+                    case .window:
+                        Button {
+                            registry.module(id: info.id)?.openSettings()
+                        } label: {
+                            Image(systemName: "gearshape")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(Color.dsMuted)
+                                .frame(width: 26, height: 26)
+                                .background(
+                                    hovering ? Color(nsColor: DS.controlHover) : Color.clear,
+                                    in: Circle())
+                        }
+                        .buttonStyle(.plain)
+                        .help("Open \(info.displayName) settings")
+                    case .inline:
+                        Button {
+                            onToggleExpanded()
+                        } label: {
+                            Image(systemName: "chevron.down")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(Color.dsMuted)
+                                .rotationEffect(.degrees(expanded ? 180 : 0))
+                                .frame(width: 26, height: 26)
+                                .background(
+                                    hovering ? Color(nsColor: DS.controlHover) : Color.clear,
+                                    in: Circle())
+                        }
+                        .buttonStyle(.plain)
+                    default:
+                        EmptyView()
                     }
-                    .buttonStyle(.plain)
                 }
             }
             .padding(16)
 
-            if expanded, !comingSoon, let module = registry.module(id: info.id) {
+            if expanded, !comingSoon, let module = registry.module(id: info.id),
+               module.settingsStyle == .inline {
                 VStack(alignment: .leading, spacing: 0) {
                     Rectangle()
                         .fill(Color.dsLine)

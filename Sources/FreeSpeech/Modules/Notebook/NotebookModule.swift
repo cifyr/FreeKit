@@ -1,10 +1,11 @@
 import AppKit
+import Combine
 import SwiftUI
 import FreeSpeechCore
 
 // Notebook: a floating note panel toggled by a global hotkey. Notes persist as
-// RTF (round-trips bold/color/bullets and stays readable by other apps) with a
-// plain-text shadow for search, one file per note via NotebookStore.
+// RTF (round-trips bold/color/headings/bullets and stays readable by other
+// apps) with a plain-text shadow for search, one file per note via NotebookStore.
 final class NotebookModule: NSObject, AppModule, NSMenuDelegate {
     let info = ModuleCatalog.notebook
 
@@ -14,6 +15,10 @@ final class NotebookModule: NSObject, AppModule, NSMenuDelegate {
     private var hotkeyToken: EventTapHub.HotkeyToken?
     private var statusItem: NSStatusItem?
     private var panel: NotebookPanelController?
+    private var config: NotebookConfig?
+    private lazy var settingsWindow = ModuleSettingsWindowController(info: info) { [weak self] in
+        self?.makeSettingsPane() ?? AnyView(EmptyView())
+    }
 
     // Ctrl+Opt+N: mnemonic for "note", off the Cmd namespace apps use.
     private static let defaultHotkey = HotkeyPreset.custom(
@@ -34,8 +39,13 @@ final class NotebookModule: NSObject, AppModule, NSMenuDelegate {
             store = NotebookStore(directory: AppPaths.notesDir)
         }
         guard let store else { return }
-        if panel == nil {
-            panel = NotebookPanelController(store: store)
+        if config == nil {
+            config = NotebookConfig(settings: settings)
+        }
+        if panel == nil, let config {
+            panel = NotebookPanelController(store: store, config: config) { [weak self] in
+                self?.openSettings()
+            }
         }
         if hotkeyToken == nil {
             hotkeyToken = hub.register(preset: hotkey, label: "notebook.toggle") { [weak self] direction in
@@ -69,21 +79,25 @@ final class NotebookModule: NSObject, AppModule, NSMenuDelegate {
         }
     }
 
+    func openSettings() {
+        settingsWindow.show()
+    }
+
     func makeSettingsPane() -> AnyView {
-        AnyView(VStack(alignment: .leading, spacing: 10) {
-            HotkeyRecorderButton(
-                label: "Toggle panel", preset: hotkey,
-                onChange: { [weak self] preset in
-                    guard let self else { return }
-                    self.settings.setModuleHotkey(preset, id: self.info.id)
-                    if let token = self.hotkeyToken {
-                        self.hub.update(token, preset: preset)
-                    }
-                })
-            Text("Notes save automatically to Application Support/FreeSpeech/notes.")
-                .font(.system(size: 11))
-                .foregroundStyle(Color.dsFaint)
-        })
+        // Settings can open while the module is off; the config is cheap and
+        // settings-backed, so build it on demand.
+        let config = self.config ?? NotebookConfig(settings: settings)
+        self.config = config
+        return AnyView(NotebookSettingsPane(
+            config: config,
+            hotkey: hotkey,
+            onHotkeyChange: { [weak self] preset in
+                guard let self else { return }
+                self.settings.setModuleHotkey(preset, id: self.info.id)
+                if let token = self.hotkeyToken {
+                    self.hub.update(token, preset: preset)
+                }
+            }))
     }
 
     // MARK: - Menu
@@ -95,7 +109,8 @@ final class NotebookModule: NSObject, AppModule, NSMenuDelegate {
         newNote.target = self
         menu.addItem(newNote)
         let open = NSMenuItem(
-            title: "Open Notebook", action: #selector(openNotebook), keyEquivalent: "")
+            title: "Open Notebook (\(hotkey.displayName))", action: #selector(openNotebook),
+            keyEquivalent: "")
         open.target = self
         menu.addItem(open)
 
@@ -111,6 +126,13 @@ final class NotebookModule: NSObject, AppModule, NSMenuDelegate {
                 menu.addItem(item)
             }
         }
+
+        menu.addItem(.separator())
+        let settingsItem = NSMenuItem(
+            title: "Notebook Settings\u{2026}", action: #selector(openSettingsFromMenu),
+            keyEquivalent: "")
+        settingsItem.target = self
+        menu.addItem(settingsItem)
     }
 
     @objc private func newNote() {
@@ -121,9 +143,45 @@ final class NotebookModule: NSObject, AppModule, NSMenuDelegate {
         panel?.show()
     }
 
+    @objc private func openSettingsFromMenu() {
+        openSettings()
+    }
+
     @objc private func openRecent(_ sender: NSMenuItem) {
         guard let raw = sender.representedObject as? String, let id = UUID(uuidString: raw) else { return }
         panel?.show(selecting: id)
+    }
+}
+
+// MARK: - Config
+
+// Settings-backed knobs the panel reacts to live.
+final class NotebookConfig: ObservableObject {
+    private let settings: Settings
+    private let id = ModuleCatalog.notebook.id
+
+    @Published var fontSize: Double {
+        didSet { settings.setModuleDouble(fontSize, id: id, key: "fontSize") }
+    }
+    @Published var sidebarVisible: Bool {
+        didSet { settings.setModuleBool(sidebarVisible, id: id, key: "sidebarVisible") }
+    }
+    @Published var floatOnTop: Bool {
+        didSet { settings.setModuleBool(floatOnTop, id: id, key: "floatOnTop") }
+    }
+
+    init(settings: Settings) {
+        self.settings = settings
+        fontSize = settings.moduleDouble(id: id, key: "fontSize") ?? 13
+        sidebarVisible = settings.moduleBool(id: id, key: "sidebarVisible") ?? true
+        floatOnTop = settings.moduleBool(id: id, key: "floatOnTop") ?? true
+    }
+
+    var bodyAttributes: [NSAttributedString.Key: Any] {
+        [
+            .font: NSFont.systemFont(ofSize: fontSize),
+            .foregroundColor: DS.paper,
+        ]
     }
 }
 
@@ -132,15 +190,30 @@ final class NotebookModule: NSObject, AppModule, NSMenuDelegate {
 final class NotebookPanelController {
     private var panel: NSPanel?
     private let model: NotebookViewModel
+    private let config: NotebookConfig
+    private var floatCancellable: AnyCancellable?
 
-    init(store: NotebookStore) {
-        model = NotebookViewModel(store: store)
+    init(store: NotebookStore, config: NotebookConfig, openSettings: @escaping () -> Void) {
+        self.config = config
+        model = NotebookViewModel(store: store, config: config, openSettings: openSettings)
     }
 
     var isVisible: Bool { panel?.isVisible ?? false }
 
+    // Hidden -> show and focus. Visible but in the background -> bring to the
+    // front and focus (hiding here is what made the hotkey feel broken: from
+    // another app the "toggle" would vanish a panel you could barely see).
+    // Visible and focused -> hide.
     func toggle() {
-        isVisible ? hide() : show()
+        guard let panel, panel.isVisible else {
+            show()
+            return
+        }
+        if panel.isKeyWindow {
+            hide()
+        } else {
+            focus()
+        }
     }
 
     func show(selecting id: UUID? = nil) {
@@ -148,16 +221,14 @@ final class NotebookPanelController {
         model.refresh()
         if let id { model.select(id) }
         if model.selectedID == nil { model.selectFirstOrCreate() }
-        panel?.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        focus()
     }
 
     func showNewNote() {
         buildIfNeeded()
         model.refresh()
         model.newNote()
-        panel?.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        focus()
     }
 
     func hide() {
@@ -165,9 +236,15 @@ final class NotebookPanelController {
         panel?.orderOut(nil)
     }
 
+    private func focus() {
+        panel?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        model.focusEditor()
+    }
+
     private func buildIfNeeded() {
         guard panel == nil else { return }
-        let hosting = NSHostingController(rootView: NotebookView(model: model))
+        let hosting = NSHostingController(rootView: NotebookView(model: model, config: config))
         // A titled, floating panel: stays over normal windows for quick capture
         // but never joins all Spaces or steals full-screen focus.
         let p = NSPanel(contentViewController: hosting)
@@ -177,13 +254,16 @@ final class NotebookPanelController {
         p.titleVisibility = .hidden
         p.appearance = NSAppearance(named: .darkAqua)
         p.backgroundColor = DS.ink0
-        p.level = .floating
+        p.level = config.floatOnTop ? .floating : .normal
         p.hidesOnDeactivate = false
         p.isReleasedWhenClosed = false
-        p.minSize = NSSize(width: 560, height: 340)
-        p.setContentSize(NSSize(width: 660, height: 420))
+        p.minSize = NSSize(width: 480, height: 340)
+        p.setContentSize(NSSize(width: 680, height: 440))
         p.center()
         panel = p
+        floatCancellable = config.$floatOnTop.sink { [weak p] onTop in
+            p?.level = onTop ? .floating : .normal
+        }
     }
 }
 
@@ -196,20 +276,18 @@ final class NotebookViewModel: ObservableObject {
     // Bumped when the editor must reload its content (selection change).
     @Published private(set) var loadGeneration = 0
     private(set) var loadedText = NSAttributedString()
+    weak var editorTextView: NSTextView?
 
     private let store: NotebookStore
+    let config: NotebookConfig
+    let openSettings: () -> Void
     private var saveTimer: Timer?
     private var pendingSave: (id: UUID, text: NSAttributedString)?
 
-    // The resting text color is paper on ink; RTF stores it explicitly so notes
-    // reopen looking exactly as written.
-    static let baseAttributes: [NSAttributedString.Key: Any] = [
-        .font: NSFont.systemFont(ofSize: 13),
-        .foregroundColor: DS.paper,
-    ]
-
-    init(store: NotebookStore) {
+    init(store: NotebookStore, config: NotebookConfig, openSettings: @escaping () -> Void) {
         self.store = store
+        self.config = config
+        self.openSettings = openSettings
         refresh()
     }
 
@@ -217,11 +295,18 @@ final class NotebookViewModel: ObservableObject {
         notes = store.search(query)
     }
 
+    func focusEditor() {
+        DispatchQueue.main.async { [weak self] in
+            guard let tv = self?.editorTextView else { return }
+            tv.window?.makeFirstResponder(tv)
+        }
+    }
+
     func select(_ id: UUID) {
         flushPendingSave()
         guard let note = store.note(id: id) else { return }
         selectedID = id
-        loadedText = Self.attributedText(from: note)
+        loadedText = attributedText(from: note)
         loadGeneration += 1
     }
 
@@ -281,12 +366,12 @@ final class NotebookViewModel: ObservableObject {
         store.upsert(note)
     }
 
-    private static func attributedText(from note: Note) -> NSAttributedString {
+    private func attributedText(from note: Note) -> NSAttributedString {
         if let rich = note.rich,
            let text = NSAttributedString(rtf: rich, documentAttributes: nil) {
             return text
         }
-        return NSAttributedString(string: note.plainText, attributes: baseAttributes)
+        return NSAttributedString(string: note.plainText, attributes: config.bodyAttributes)
     }
 }
 
@@ -294,6 +379,7 @@ final class NotebookViewModel: ObservableObject {
 
 struct NotebookView: View {
     @ObservedObject var model: NotebookViewModel
+    @ObservedObject var config: NotebookConfig
     @StateObject private var editor = RichTextEditorProxy()
 
     private static let timeFormatter: DateFormatter = {
@@ -304,65 +390,93 @@ struct NotebookView: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(spacing: 8) {
-                    Image(systemName: "magnifyingglass")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(Color.dsFaint)
-                    TextField("Search notes", text: $model.query)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 12))
-                        .foregroundStyle(Color.dsPaper)
-                }
-                .padding(.horizontal, 10)
-                .frame(height: 32)
-                .background(
-                    Color.dsInk2,
-                    in: RoundedRectangle(cornerRadius: DS.radiusControl, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: DS.radiusControl, style: .continuous)
-                        .strokeBorder(Color.dsLine, lineWidth: 1))
-
-                ScrollView {
-                    LazyVStack(spacing: 4) {
-                        ForEach(model.notes) { note in
-                            NoteRow(
-                                note: note,
-                                selected: model.selectedID == note.id,
-                                timeFormatter: Self.timeFormatter,
-                                onSelect: { model.select(note.id) },
-                                onDelete: { model.delete(note.id) })
-                        }
-                    }
-                }
-
-                Button("New Note") { model.newNote() }
-                    .buttonStyle(GhostButtonStyle())
-                    .frame(maxWidth: .infinity)
+            if config.sidebarVisible {
+                sidebar
+                Rectangle().fill(Color.dsLine).frame(width: 1)
             }
-            .padding(12)
-            .frame(width: 210)
-
-            Rectangle().fill(Color.dsLine).frame(width: 1)
 
             VStack(alignment: .leading, spacing: 0) {
-                HStack(spacing: 6) {
-                    formatButton("bold", help: "Bold") { editor.toggleBold() }
-                    formatButton("list.bullet", help: "Bullet list") { editor.toggleBullets() }
-                    Rectangle().fill(Color.dsLine).frame(width: 1, height: 16)
-                    colorSwatch(DS.paper, name: "Paper")
-                    colorSwatch(DS.accent, name: "Red")
-                    colorSwatch(DS.muted, name: "Muted")
-                    Spacer()
-                }
-                .padding(.horizontal, 14)
-                .frame(height: 40)
+                toolbar
                 Rectangle().fill(Color.dsLine).frame(height: 1)
                 RichTextEditor(model: model, proxy: editor)
             }
         }
         .background(Color.dsInk0)
-        .frame(minWidth: 560, minHeight: 340)
+        .frame(minWidth: 480, minHeight: 340)
+        .animation(.easeOut(duration: DS.durBase), value: config.sidebarVisible)
+    }
+
+    private var sidebar: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Color.dsFaint)
+                TextField("Search notes", text: $model.query)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Color.dsPaper)
+            }
+            .padding(.horizontal, 10)
+            .frame(height: 32)
+            .background(
+                Color.dsInk2,
+                in: RoundedRectangle(cornerRadius: DS.radiusControl, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: DS.radiusControl, style: .continuous)
+                    .strokeBorder(Color.dsLine, lineWidth: 1))
+
+            ScrollView {
+                LazyVStack(spacing: 4) {
+                    ForEach(model.notes) { note in
+                        NoteRow(
+                            note: note,
+                            selected: model.selectedID == note.id,
+                            timeFormatter: Self.timeFormatter,
+                            onSelect: { model.select(note.id) },
+                            onDelete: { model.delete(note.id) })
+                    }
+                }
+            }
+
+            Button("New Note") { model.newNote() }
+                .buttonStyle(GhostButtonStyle())
+                .frame(maxWidth: .infinity)
+        }
+        .padding(12)
+        .frame(width: 210)
+    }
+
+    private var toolbar: some View {
+        HStack(spacing: 6) {
+            formatButton("sidebar.left", help: config.sidebarVisible ? "Hide sidebar" : "Show sidebar") {
+                config.sidebarVisible.toggle()
+            }
+            Rectangle().fill(Color.dsLine).frame(width: 1, height: 16)
+            formatButton("textformat.size.larger", help: "Title") {
+                editor.applyHeading(.title, baseSize: config.fontSize)
+            }
+            formatButton("textformat.size", help: "Heading") {
+                editor.applyHeading(.heading, baseSize: config.fontSize)
+            }
+            formatButton("textformat", help: "Body text") {
+                editor.applyHeading(.body, baseSize: config.fontSize)
+            }
+            Rectangle().fill(Color.dsLine).frame(width: 1, height: 16)
+            formatButton("bold", help: "Bold") { editor.toggleBold() }
+            formatButton("list.bullet", help: "Bullet list") { editor.toggleBullets() }
+            formatButton("rectangle.split.1x2", help: "Page split") {
+                editor.insertDivider(baseSize: config.fontSize)
+            }
+            Rectangle().fill(Color.dsLine).frame(width: 1, height: 16)
+            colorSwatch(DS.paper, name: "Paper")
+            colorSwatch(DS.accent, name: "Red")
+            colorSwatch(DS.muted, name: "Muted")
+            Spacer()
+            formatButton("gearshape", help: "Notebook settings") { model.openSettings() }
+        }
+        .padding(.horizontal, 14)
+        .frame(height: 40)
     }
 
     private func formatButton(_ symbol: String, help: String, action: @escaping () -> Void) -> some View {
@@ -440,12 +554,74 @@ private struct NoteRow: View {
     }
 }
 
+// MARK: - Settings pane
+
+private struct NotebookSettingsPane: View {
+    @ObservedObject var config: NotebookConfig
+    let hotkey: HotkeyPreset
+    let onHotkeyChange: (HotkeyPreset) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HotkeyRecorderButton(label: "Toggle panel", preset: hotkey, onChange: onHotkeyChange)
+
+            VStack(alignment: .leading, spacing: 8) {
+                DSSectionLabel("Text size")
+                HStack(spacing: 8) {
+                    ForEach([11.0, 13.0, 15.0, 17.0], id: \.self) { size in
+                        DSChip(title: "\(Int(size)) pt", selected: config.fontSize == size) {
+                            config.fontSize = size
+                        }
+                    }
+                    DSNumberField(
+                        placeholder: "pt",
+                        value: $config.fontSize,
+                        range: 9...32,
+                        fractionDigits: 0,
+                        onCommit: { config.fontSize = $0 })
+                }
+                Text("Applies to new text; existing notes keep their styling.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.dsFaint)
+            }
+
+            VStack(alignment: .leading, spacing: 10) {
+                DSSectionLabel("Panel")
+                DSToggleRow(
+                    title: "Show sidebar",
+                    caption: "Note list and search. Also toggleable from the toolbar.",
+                    isOn: $config.sidebarVisible)
+                DSToggleRow(
+                    title: "Keep panel on top",
+                    caption: "Float above other windows while open.",
+                    isOn: $config.floatOnTop)
+            }
+
+            Text("Notes save automatically to Application Support/FreeSpeech/notes.")
+                .font(.system(size: 11))
+                .foregroundStyle(Color.dsFaint)
+        }
+    }
+}
+
 // MARK: - Rich text editor
 
 // Formatting commands reach the NSTextView through this proxy so SwiftUI
 // toolbar buttons and the AppKit view stay decoupled.
 final class RichTextEditorProxy: ObservableObject {
     weak var textView: NSTextView?
+
+    enum HeadingLevel {
+        case title, heading, body
+
+        func font(baseSize: Double) -> NSFont {
+            switch self {
+            case .title: return NSFont.systemFont(ofSize: baseSize + 8, weight: .bold)
+            case .heading: return NSFont.systemFont(ofSize: baseSize + 3, weight: .semibold)
+            case .body: return NSFont.systemFont(ofSize: baseSize)
+            }
+        }
+    }
 
     func toggleBold() {
         guard let tv = textView, let storage = tv.textStorage else { return }
@@ -479,6 +655,23 @@ final class RichTextEditorProxy: ObservableObject {
         }
     }
 
+    // Titles/headings apply per paragraph: partial-line headings read as noise.
+    func applyHeading(_ level: HeadingLevel, baseSize: Double) {
+        guard let tv = textView, let storage = tv.textStorage else { return }
+        let text = storage.string as NSString
+        let range = text.paragraphRange(for: tv.selectedRange())
+        let font = level.font(baseSize: baseSize)
+        if range.length > 0 {
+            storage.beginEditing()
+            storage.addAttribute(.font, value: font, range: range)
+            storage.endEditing()
+            tv.didChangeText()
+        }
+        var attrs = tv.typingAttributes
+        attrs[.font] = font
+        tv.typingAttributes = attrs
+    }
+
     func applyColor(_ color: NSColor) {
         guard let tv = textView, let storage = tv.textStorage else { return }
         let range = tv.selectedRange()
@@ -489,6 +682,30 @@ final class RichTextEditorProxy: ObservableObject {
         var attrs = tv.typingAttributes
         attrs[.foregroundColor] = color
         tv.typingAttributes = attrs
+    }
+
+    // Page split: a faint full-line rule as literal text, so it survives the
+    // RTF round-trip without RTFD attachments.
+    func insertDivider(baseSize: Double) {
+        guard let tv = textView, let storage = tv.textStorage else { return }
+        let insertAt = tv.selectedRange().location
+        let text = storage.string as NSString
+        let atLineStart = insertAt == 0 || text.character(at: insertAt - 1) == 0x0A
+        let rule = String(repeating: "\u{2500}", count: 32)
+        let divider = NSMutableAttributedString(
+            string: (atLineStart ? "" : "\n") + rule + "\n",
+            attributes: [
+                .font: NSFont.systemFont(ofSize: baseSize),
+                .foregroundColor: DS.faint,
+            ])
+        storage.insert(divider, at: insertAt)
+        tv.setSelectedRange(NSRange(location: insertAt + divider.length, length: 0))
+        // Typing after a split starts fresh body text, not faint rule styling.
+        var attrs = tv.typingAttributes
+        attrs[.font] = HeadingLevel.body.font(baseSize: baseSize)
+        attrs[.foregroundColor] = DS.paper
+        tv.typingAttributes = attrs
+        tv.didChangeText()
     }
 
     // Literal "•\t" markers plus a hanging indent: renders as a real list and
@@ -560,11 +777,12 @@ struct RichTextEditor: NSViewRepresentable {
         tv.backgroundColor = DS.ink0
         tv.insertionPointColor = DS.accent
         tv.textContainerInset = NSSize(width: 14, height: 12)
-        tv.typingAttributes = NotebookViewModel.baseAttributes
+        tv.typingAttributes = model.config.bodyAttributes
         tv.selectedTextAttributes = [.backgroundColor: DS.ink3]
         scroll.drawsBackground = true
         scroll.backgroundColor = DS.ink0
         proxy.textView = tv
+        model.editorTextView = tv
         context.coordinator.textView = tv
         return scroll
     }
@@ -572,13 +790,14 @@ struct RichTextEditor: NSViewRepresentable {
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         let coordinator = context.coordinator
         proxy.textView = coordinator.textView
+        model.editorTextView = coordinator.textView
         guard coordinator.loadedGeneration != model.loadGeneration,
               let tv = coordinator.textView else { return }
         coordinator.loadedGeneration = model.loadGeneration
         coordinator.suppressChangeCallback = true
         tv.textStorage?.setAttributedString(model.loadedText)
         if tv.string.isEmpty {
-            tv.typingAttributes = NotebookViewModel.baseAttributes
+            tv.typingAttributes = model.config.bodyAttributes
         }
         coordinator.suppressChangeCallback = false
     }

@@ -33,6 +33,22 @@ final class AutoclickPlanTests: XCTestCase {
         XCTAssertEqual(AutoclickPlan(interval: 0.1, maxClicks: -5).maxClicks, 1)
     }
 
+    func testClickTypePressesPerTick() {
+        XCTAssertEqual(AutoclickPlan.ClickType.single.pressesPerTick, 1)
+        XCTAssertEqual(AutoclickPlan.ClickType.double.pressesPerTick, 2)
+    }
+
+    func testPlanCarriesClickTypeAndSafetyFlag() {
+        let plan = AutoclickPlan(
+            interval: 0.1, clickType: .double, stopOnCursorMove: true)
+        XCTAssertEqual(plan.clickType, .double)
+        XCTAssertTrue(plan.stopOnCursorMove)
+        // Defaults stay conservative: single click, no cursor guard.
+        let defaults = AutoclickPlan(interval: 0.1)
+        XCTAssertEqual(defaults.clickType, .single)
+        XCTAssertFalse(defaults.stopOnCursorMove)
+    }
+
     func testTickScheduleStartsImmediatelyAndSpacesByInterval() {
         let plan = AutoclickPlan(interval: 0.5)
         XCTAssertEqual(plan.tickTimes(count: 4), [0, 0.5, 1.0, 1.5])

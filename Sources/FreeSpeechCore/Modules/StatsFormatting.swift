@@ -35,6 +35,17 @@ public enum StatsFormatting {
         return String(format: "%.0f%%", clamped * 100)
     }
 
+    // Compact uptime: the two most significant units only.
+    public static func uptime(_ seconds: TimeInterval) -> String {
+        let total = max(0, Int(seconds))
+        let days = total / 86_400
+        let hours = (total % 86_400) / 3_600
+        let minutes = (total % 3_600) / 60
+        if days > 0 { return "\(days)d \(hours)h" }
+        if hours > 0 { return "\(hours)h \(minutes)m" }
+        return "\(minutes)m"
+    }
+
     // Per-interface counters wrap and interfaces come and go; a negative delta
     // (counter reset, interface re-created) must clamp to zero, not go backwards.
     public static func throughput(previous: UInt64, current: UInt64,

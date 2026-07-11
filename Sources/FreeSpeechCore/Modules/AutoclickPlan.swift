@@ -16,6 +16,23 @@ public struct AutoclickPlan: Equatable {
         }
     }
 
+    public enum ClickType: String, CaseIterable {
+        case single, double
+
+        public var displayName: String {
+            switch self {
+            case .single: return "Single"
+            case .double: return "Double"
+            }
+        }
+
+        // How many down/up pairs one tick posts (double-clicks pair two with
+        // an increasing click state).
+        public var pressesPerTick: Int {
+            self == .double ? 2 : 1
+        }
+    }
+
     public enum Target: String, CaseIterable {
         case cursor
         case fixedPoint
@@ -38,13 +55,19 @@ public struct AutoclickPlan: Equatable {
     public var maxClicks: Int?
     public var button: Button
     public var target: Target
+    public var clickType: ClickType
+    // Fixed-point safety: moving the physical cursor cancels the run.
+    public var stopOnCursorMove: Bool
 
     public init(interval: TimeInterval, maxClicks: Int? = nil,
-                button: Button = .left, target: Target = .cursor) {
+                button: Button = .left, target: Target = .cursor,
+                clickType: ClickType = .single, stopOnCursorMove: Bool = false) {
         self.interval = min(max(interval, Self.minInterval), Self.maxInterval)
         self.maxClicks = maxClicks.map { max(1, $0) }
         self.button = button
         self.target = target
+        self.clickType = clickType
+        self.stopOnCursorMove = stopOnCursorMove
     }
 
     public var clicksPerSecond: Double { 1.0 / interval }

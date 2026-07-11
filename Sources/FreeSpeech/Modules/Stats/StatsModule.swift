@@ -3,16 +3,74 @@ import SwiftUI
 import IOKit
 import FreeSpeechCore
 
-// Stats: live machine metrics. Every section is individually toggleable, the
-// refresh pace is configurable, and the menu bar item itself can show a live
-// value instead of just the gauge icon. Menu sampling runs only while the menu
-// is open; a live menu-bar value samples on its own timer.
+// Stats: live machine metrics, modeled like the Stats app — every stat can be
+// shown in the dropdown, promoted to its own menu bar item, and each menu bar
+// item gets its own display style. Dropdown sampling runs only while a menu is
+// open; live menu-bar values share one background timer.
 final class StatsModule: NSObject, AppModule, NSMenuDelegate {
     let info = ModuleCatalog.stats
 
+    // One entry per stat the suite knows how to sample. Adding a stat here
+    // gives it menu rows, an optional menu bar item, and settings for free.
+    enum StatKind: String, CaseIterable {
+        case cpu, memory, network, disk, system, bluetooth
+
+        var displayName: String {
+            switch self {
+            case .cpu: return "CPU"
+            case .memory: return "Memory"
+            case .network: return "Network"
+            case .disk: return "Disk"
+            case .system: return "Uptime and load"
+            case .bluetooth: return "Bluetooth battery"
+            }
+        }
+
+        var symbolName: String {
+            switch self {
+            case .cpu: return "cpu"
+            case .memory: return "memorychip"
+            case .network: return "arrow.up.arrow.down"
+            case .disk: return "internaldrive"
+            case .system: return "clock"
+            case .bluetooth: return "battery.75percent"
+            }
+        }
+
+        // Legacy key names from the first Stats release, kept so existing
+        // show/hide choices survive.
+        var showKey: String {
+            switch self {
+            case .cpu: return "showCPU"
+            case .memory: return "showMemory"
+            case .network: return "showNetwork"
+            case .disk: return "showDisk"
+            case .system: return "showSystem"
+            case .bluetooth: return "showBluetooth"
+            }
+        }
+
+        var itemKey: String { "item.\(rawValue)" }
+        var variantKey: String { "variant.\(rawValue)" }
+        var iconKey: String { "itemIcon.\(rawValue)" }
+
+        // Display variants for this stat's own menu bar item.
+        var variants: [(id: String, name: String)] {
+            switch self {
+            case .cpu: return [("percent", "Percent")]
+            case .memory: return [("percent", "Percent"), ("used", "Used GB")]
+            case .network: return [("down", "Down"), ("up", "Up"), ("both", "Both")]
+            case .disk: return [("free", "Free"), ("used", "Used"), ("percent", "Used %")]
+            case .system: return [("load", "Load"), ("uptime", "Uptime")]
+            case .bluetooth: return [("lowest", "Lowest %")]
+            }
+        }
+    }
+
     private let settings: Settings
     private let sampler = StatsSampler()
-    private var statusItem: NSStatusItem?
+    private var mainItem: NSStatusItem?
+    private var statItems: [StatKind: NSStatusItem] = [:]
     private var menuTimer: Timer?
     private var menuBarTimer: Timer?
     private let menu = NSMenu()
@@ -24,26 +82,6 @@ final class StatsModule: NSObject, AppModule, NSMenuDelegate {
 
     enum Key {
         static let refreshInterval = "refreshInterval"
-        static let showCPU = "showCPU"
-        static let showMemory = "showMemory"
-        static let showNetwork = "showNetwork"
-        static let showDisk = "showDisk"
-        static let showSystem = "showSystem"
-        static let showBluetooth = "showBluetooth"
-        static let menuBarStyle = "menuBarStyle"
-    }
-
-    enum MenuBarStyle: String, CaseIterable {
-        case icon, cpu, memory, network
-
-        var displayName: String {
-            switch self {
-            case .icon: return "Icon only"
-            case .cpu: return "CPU %"
-            case .memory: return "Memory %"
-            case .network: return "Net down"
-            }
-        }
     }
 
     init(settings: Settings) {
@@ -57,44 +95,39 @@ final class StatsModule: NSObject, AppModule, NSMenuDelegate {
         settings.moduleDouble(id: info.id, key: Key.refreshInterval) ?? 1.0
     }
 
-    private func shows(_ key: String) -> Bool {
-        settings.moduleBool(id: info.id, key: key) ?? true
+    private func showsInMenu(_ kind: StatKind) -> Bool {
+        settings.moduleBool(id: info.id, key: kind.showKey) ?? true
     }
 
-    private var menuBarStyle: MenuBarStyle {
-        settings.moduleString(id: info.id, key: Key.menuBarStyle)
-            .flatMap(MenuBarStyle.init) ?? .icon
+    private func hasOwnItem(_ kind: StatKind) -> Bool {
+        settings.moduleBool(id: info.id, key: kind.itemKey) ?? false
+    }
+
+    private func variant(_ kind: StatKind) -> String {
+        settings.moduleString(id: info.id, key: kind.variantKey) ?? kind.variants[0].id
+    }
+
+    private func showsIcon(_ kind: StatKind) -> Bool {
+        settings.moduleBool(id: info.id, key: kind.iconKey) ?? true
     }
 
     func activate() {
         active = true
         // Baseline the counters so the first menu open shows real deltas.
         sampler.sample()
-        reconfigureMenuBarTimer()
+        applyMenuBarConfiguration()
     }
 
     func deactivate() {
         active = false
         menuTimer?.invalidate()
         menuTimer = nil
-        reconfigureMenuBarTimer()
+        applyMenuBarConfiguration()
     }
 
     func setMenuBarItemVisible(_ visible: Bool) {
         menuBarVisible = visible
-        if visible {
-            if statusItem == nil {
-                let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-                item.button?.toolTip = "Stats"
-                item.menu = menu
-                statusItem = item
-            }
-            statusItem?.isVisible = true
-            applyMenuBarPresentation(sampleNow: true)
-        } else {
-            statusItem?.isVisible = false
-        }
-        reconfigureMenuBarTimer()
+        applyMenuBarConfiguration()
     }
 
     func openSettings() {
@@ -103,51 +136,114 @@ final class StatsModule: NSObject, AppModule, NSMenuDelegate {
 
     func makeSettingsPane() -> AnyView {
         AnyView(StatsSettingsPane(settings: settings, onDisplayChange: { [weak self] in
-            self?.applyMenuBarPresentation(sampleNow: true)
-            self?.reconfigureMenuBarTimer()
+            self?.applyMenuBarConfiguration()
         }))
     }
 
-    // MARK: - Menu bar presentation
+    // MARK: - Menu bar items
 
-    // A text style keeps its own low-frequency timer so the number stays live
-    // without the menu being open; icon-only costs nothing at rest.
+    // Rebuilds the whole set: the main gauge item plus one item per promoted
+    // stat. Cheap enough to run on every settings change.
+    private func applyMenuBarConfiguration() {
+        let showAll = active && menuBarVisible
+
+        if showAll {
+            if mainItem == nil {
+                let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+                item.button?.image = NSImage(
+                    systemSymbolName: info.symbolName, accessibilityDescription: "Stats")
+                item.button?.toolTip = "Stats"
+                item.menu = menu
+                mainItem = item
+            }
+            mainItem?.isVisible = true
+        } else {
+            mainItem?.isVisible = false
+        }
+
+        for kind in StatKind.allCases {
+            let wanted = showAll && hasOwnItem(kind)
+            if wanted {
+                if statItems[kind] == nil {
+                    let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+                    item.button?.toolTip = "Stats: \(kind.displayName)"
+                    // All stat items share the one dropdown; whichever opens it
+                    // sees the same live overview.
+                    item.menu = menu
+                    statItems[kind] = item
+                }
+                statItems[kind]?.isVisible = true
+            } else {
+                statItems[kind]?.isVisible = false
+            }
+        }
+
+        reconfigureMenuBarTimer()
+        updateStatItems(sampleNow: true)
+    }
+
+    private var anyLiveItems: Bool {
+        active && menuBarVisible && StatKind.allCases.contains { hasOwnItem($0) }
+    }
+
     private func reconfigureMenuBarTimer() {
         menuBarTimer?.invalidate()
         menuBarTimer = nil
-        guard active, menuBarVisible, menuBarStyle != .icon else { return }
+        guard anyLiveItems else { return }
+        // Background updates are capped at one per 2s: menu-bar text does not
+        // need dropdown-grade freshness.
         let timer = Timer(timeInterval: max(refreshInterval, 2.0), repeats: true) { [weak self] _ in
-            self?.applyMenuBarPresentation(sampleNow: true)
+            self?.updateStatItems(sampleNow: true)
         }
         RunLoop.main.add(timer, forMode: .common)
         menuBarTimer = timer
     }
 
-    private func applyMenuBarPresentation(sampleNow: Bool) {
-        guard let button = statusItem?.button else { return }
-        let style = menuBarStyle
-        guard style != .icon else {
-            button.image = NSImage(
-                systemSymbolName: info.symbolName, accessibilityDescription: "Stats")
-            button.attributedTitle = NSAttributedString(string: "")
-            return
-        }
+    private func updateStatItems(sampleNow: Bool) {
+        guard anyLiveItems else { return }
         let snapshot = sampleNow ? sampler.sample() : sampler.lastSnapshot
-        let text: String
-        switch style {
-        case .icon:
-            text = ""
-        case .cpu:
-            text = "CPU \(StatsFormatting.percent(snapshot.cpuUsage))"
-        case .memory:
-            text = "MEM \(StatsFormatting.percent(snapshot.memoryUsed / max(snapshot.memoryTotal, 1)))"
-        case .network:
-            text = "\u{2193}\(StatsFormatting.bytesPerSecond(snapshot.downloadBytesPerSecond))"
+        for (kind, item) in statItems where item.isVisible {
+            guard let button = item.button else { continue }
+            let text = menuBarText(kind: kind, snapshot: snapshot)
+            button.image = showsIcon(kind)
+                ? NSImage(systemSymbolName: kind.symbolName,
+                          accessibilityDescription: kind.displayName)
+                : nil
+            button.imagePosition = .imageLeading
+            button.attributedTitle = NSAttributedString(
+                string: text,
+                attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium)])
         }
-        button.image = nil
-        button.attributedTitle = NSAttributedString(
-            string: text,
-            attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium)])
+    }
+
+    private func menuBarText(kind: StatKind, snapshot: StatsSnapshot) -> String {
+        switch (kind, variant(kind)) {
+        case (.cpu, _):
+            return StatsFormatting.percent(snapshot.cpuUsage)
+        case (.memory, "used"):
+            return StatsFormatting.bytes(snapshot.memoryUsed)
+        case (.memory, _):
+            return StatsFormatting.percent(snapshot.memoryUsed / max(snapshot.memoryTotal, 1))
+        case (.network, "up"):
+            return "\u{2191}\(StatsFormatting.bytesPerSecond(snapshot.uploadBytesPerSecond))"
+        case (.network, "both"):
+            return "\u{2193}\(StatsFormatting.bytesPerSecond(snapshot.downloadBytesPerSecond)) \u{2191}\(StatsFormatting.bytesPerSecond(snapshot.uploadBytesPerSecond))"
+        case (.network, _):
+            return "\u{2193}\(StatsFormatting.bytesPerSecond(snapshot.downloadBytesPerSecond))"
+        case (.disk, "used"):
+            return StatsFormatting.bytes(snapshot.diskUsed)
+        case (.disk, "percent"):
+            return StatsFormatting.percent(snapshot.diskUsed / max(snapshot.diskTotal, 1))
+        case (.disk, _):
+            return "\(StatsFormatting.bytes(snapshot.diskFree)) free"
+        case (.system, "uptime"):
+            return StatsFormatting.uptime(snapshot.uptime)
+        case (.system, _):
+            return String(format: "%.2f", snapshot.loadAverages.0)
+        case (.bluetooth, _):
+            let lowest = sampler.bluetoothBatteries().map(\.percent).min()
+            return lowest.map { "\($0)%" } ?? "\u{2014}"
+        }
     }
 
     // MARK: - Menu lifecycle
@@ -171,12 +267,12 @@ final class StatsModule: NSObject, AppModule, NSMenuDelegate {
         let snapshot = sampler.sample()
         menu.removeAllItems()
 
-        if shows(Key.showCPU) || shows(Key.showMemory) {
+        if showsInMenu(.cpu) || showsInMenu(.memory) {
             addHeader("MACHINE")
-            if shows(Key.showCPU) {
+            if showsInMenu(.cpu) {
                 addMetric("CPU", StatsFormatting.percent(snapshot.cpuUsage))
             }
-            if shows(Key.showMemory) {
+            if showsInMenu(.memory) {
                 addMetric("Memory", "\(StatsFormatting.bytes(snapshot.memoryUsed)) of \(StatsFormatting.bytes(snapshot.memoryTotal)) (\(StatsFormatting.percent(snapshot.memoryUsed / max(snapshot.memoryTotal, 1))))")
                 if snapshot.swapUsed > 0 {
                     addMetric("Swap", StatsFormatting.bytes(snapshot.swapUsed))
@@ -184,21 +280,21 @@ final class StatsModule: NSObject, AppModule, NSMenuDelegate {
             }
         }
 
-        if shows(Key.showNetwork) {
+        if showsInMenu(.network) {
             menu.addItem(.separator())
             addHeader("NETWORK")
             addMetric("Down", StatsFormatting.bytesPerSecond(snapshot.downloadBytesPerSecond))
             addMetric("Up", StatsFormatting.bytesPerSecond(snapshot.uploadBytesPerSecond))
         }
 
-        if shows(Key.showDisk) {
+        if showsInMenu(.disk) {
             menu.addItem(.separator())
             addHeader("DISK")
             addMetric("Used", "\(StatsFormatting.bytes(snapshot.diskUsed)) of \(StatsFormatting.bytes(snapshot.diskTotal))")
             addMetric("Free", StatsFormatting.bytes(snapshot.diskFree))
         }
 
-        if shows(Key.showSystem) {
+        if showsInMenu(.system) {
             menu.addItem(.separator())
             addHeader("SYSTEM")
             addMetric("Uptime", StatsFormatting.uptime(snapshot.uptime))
@@ -207,7 +303,7 @@ final class StatsModule: NSObject, AppModule, NSMenuDelegate {
                                      snapshot.loadAverages.2))
         }
 
-        if shows(Key.showBluetooth) {
+        if showsInMenu(.bluetooth) {
             menu.addItem(.separator())
             addHeader("BLUETOOTH BATTERY")
             let devices = sampler.bluetoothBatteries()
@@ -268,35 +364,16 @@ private struct StatsSettingsPane: View {
 
     private let moduleID = ModuleCatalog.stats.id
     @State private var refresh: Double
-    @State private var style: StatsModule.MenuBarStyle
 
     init(settings: Settings, onDisplayChange: @escaping () -> Void) {
         self.settings = settings
         self.onDisplayChange = onDisplayChange
-        let id = ModuleCatalog.stats.id
-        _refresh = State(initialValue: settings.moduleDouble(id: id, key: StatsModule.Key.refreshInterval) ?? 1.0)
-        _style = State(initialValue: settings.moduleString(id: id, key: StatsModule.Key.menuBarStyle)
-            .flatMap(StatsModule.MenuBarStyle.init) ?? .icon)
+        _refresh = State(initialValue: settings.moduleDouble(
+            id: ModuleCatalog.stats.id, key: StatsModule.Key.refreshInterval) ?? 1.0)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            VStack(alignment: .leading, spacing: 8) {
-                DSSectionLabel("Menu bar shows")
-                HStack(spacing: 8) {
-                    ForEach(StatsModule.MenuBarStyle.allCases, id: \.rawValue) { value in
-                        DSChip(title: value.displayName, selected: style == value) {
-                            style = value
-                            settings.setModuleString(value.rawValue, id: moduleID, key: StatsModule.Key.menuBarStyle)
-                            onDisplayChange()
-                        }
-                    }
-                }
-                Text("A live value samples in the background (2s minimum); the icon costs nothing at rest.")
-                    .font(.system(size: 11))
-                    .foregroundStyle(Color.dsFaint)
-            }
-
             VStack(alignment: .leading, spacing: 8) {
                 DSSectionLabel("Refresh every")
                 HStack(spacing: 8) {
@@ -309,26 +386,94 @@ private struct StatsSettingsPane: View {
                         }
                     }
                 }
+                Text("Applies to the dropdown; standalone menu bar values update at this pace, 2s minimum.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.dsFaint)
             }
 
-            VStack(alignment: .leading, spacing: 10) {
-                DSSectionLabel("Sections")
-                toggle("CPU", StatsModule.Key.showCPU)
-                toggle("Memory and swap", StatsModule.Key.showMemory)
-                toggle("Network throughput", StatsModule.Key.showNetwork)
-                toggle("Disk usage", StatsModule.Key.showDisk)
-                toggle("Uptime and load", StatsModule.Key.showSystem)
-                toggle("Bluetooth battery", StatsModule.Key.showBluetooth)
+            ForEach(StatsModule.StatKind.allCases, id: \.rawValue) { kind in
+                StatKindSection(
+                    settings: settings, kind: kind, onDisplayChange: onDisplayChange)
             }
         }
     }
+}
 
-    private func toggle(_ title: String, _ key: String) -> some View {
-        DSToggleRow(
-            title: title,
-            isOn: Binding(
-                get: { settings.moduleBool(id: moduleID, key: key) ?? true },
-                set: { settings.setModuleBool($0, id: moduleID, key: key) }))
+// Per-stat block: dropdown visibility, own menu bar item, and that item's style.
+private struct StatKindSection: View {
+    let settings: Settings
+    let kind: StatsModule.StatKind
+    let onDisplayChange: () -> Void
+
+    private let moduleID = ModuleCatalog.stats.id
+    @State private var inMenu: Bool
+    @State private var ownItem: Bool
+    @State private var variant: String
+    @State private var icon: Bool
+
+    init(settings: Settings, kind: StatsModule.StatKind, onDisplayChange: @escaping () -> Void) {
+        self.settings = settings
+        self.kind = kind
+        self.onDisplayChange = onDisplayChange
+        let id = ModuleCatalog.stats.id
+        _inMenu = State(initialValue: settings.moduleBool(id: id, key: kind.showKey) ?? true)
+        _ownItem = State(initialValue: settings.moduleBool(id: id, key: kind.itemKey) ?? false)
+        _variant = State(initialValue: settings.moduleString(id: id, key: kind.variantKey)
+            ?? kind.variants[0].id)
+        _icon = State(initialValue: settings.moduleBool(id: id, key: kind.iconKey) ?? true)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: kind.symbolName)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Color.dsMuted)
+                    .frame(width: 16)
+                Text(kind.displayName.uppercased())
+                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .kerning(1.2)
+                    .foregroundStyle(Color.dsMuted)
+            }
+            DSToggleRow(title: "Show in dropdown", isOn: Binding(
+                get: { inMenu },
+                set: {
+                    inMenu = $0
+                    settings.setModuleBool($0, id: moduleID, key: kind.showKey)
+                }))
+            DSToggleRow(title: "Own menu bar item", isOn: Binding(
+                get: { ownItem },
+                set: {
+                    ownItem = $0
+                    settings.setModuleBool($0, id: moduleID, key: kind.itemKey)
+                    onDisplayChange()
+                }))
+            if ownItem {
+                HStack(spacing: 8) {
+                    if kind.variants.count > 1 {
+                        ForEach(kind.variants, id: \.id) { option in
+                            DSChip(title: option.name, selected: variant == option.id) {
+                                variant = option.id
+                                settings.setModuleString(option.id, id: moduleID, key: kind.variantKey)
+                                onDisplayChange()
+                            }
+                        }
+                    }
+                    DSChip(title: "Icon", selected: icon) {
+                        icon.toggle()
+                        settings.setModuleBool(icon, id: moduleID, key: kind.iconKey)
+                        onDisplayChange()
+                    }
+                }
+            }
+        }
+        .padding(12)
+        .background(
+            Color.dsInk1,
+            in: RoundedRectangle(cornerRadius: DS.radiusControl, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: DS.radiusControl, style: .continuous)
+                .strokeBorder(Color.dsLine, lineWidth: 1))
     }
 }
 

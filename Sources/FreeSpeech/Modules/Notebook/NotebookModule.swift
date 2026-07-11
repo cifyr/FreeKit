@@ -489,36 +489,137 @@ struct NotebookView: View {
         .frame(width: 210)
     }
 
+    // Content colors are user data, not interface chrome, so the palette here
+    // deliberately goes beyond the DS accent (Google-Docs-style choice).
+    private static let textColors: [(NSColor, String)] = [
+        (DS.paper, "Paper"), (DS.muted, "Muted"), (.systemGray, "Gray"),
+        (DS.accent, "Red"), (.systemOrange, "Orange"), (.systemYellow, "Yellow"),
+        (.systemGreen, "Green"), (.systemMint, "Mint"), (.systemTeal, "Teal"),
+        (.systemBlue, "Blue"), (.systemIndigo, "Indigo"), (.systemPurple, "Purple"),
+        (.systemPink, "Pink"), (.systemBrown, "Brown"),
+    ]
+
+    private static let highlightColors: [(NSColor, String)] = [
+        (NSColor.systemYellow.withAlphaComponent(0.35), "Yellow"),
+        (NSColor.systemGreen.withAlphaComponent(0.35), "Green"),
+        (NSColor.systemBlue.withAlphaComponent(0.35), "Blue"),
+        (NSColor.systemPink.withAlphaComponent(0.35), "Pink"),
+        (NSColor.systemPurple.withAlphaComponent(0.35), "Purple"),
+        (DS.accent.withAlphaComponent(0.35), "Red"),
+    ]
+
+    private static let fontSizes: [Double] = [10, 12, 13, 14, 16, 18, 20, 24, 28]
+
+    @State private var showTextColors = false
+    @State private var showHighlights = false
+    @State private var showSizes = false
+
     private var toolbar: some View {
-        HStack(spacing: 6) {
-            formatButton("sidebar.left", help: config.sidebarVisible ? "Hide sidebar" : "Show sidebar") {
-                config.sidebarVisible.toggle()
+        VStack(spacing: 0) {
+            HStack(spacing: 6) {
+                formatButton("sidebar.left", help: config.sidebarVisible ? "Hide sidebar" : "Show sidebar") {
+                    config.sidebarVisible.toggle()
+                }
+                Rectangle().fill(Color.dsLine).frame(width: 1, height: 16)
+                formatButton("textformat.size.larger", help: "Title") {
+                    editor.applyHeading(font: config.font(for: .title))
+                }
+                formatButton("textformat.size", help: "Heading") {
+                    editor.applyHeading(font: config.font(for: .heading))
+                }
+                formatButton("textformat", help: "Body text") {
+                    editor.applyHeading(font: config.font(for: .body))
+                }
+                Rectangle().fill(Color.dsLine).frame(width: 1, height: 16)
+                formatButton("bold", help: "Bold") { editor.toggleBold() }
+                formatButton("italic", help: "Italic") { editor.toggleItalic() }
+                formatButton("underline", help: "Underline") { editor.toggleUnderline() }
+                formatButton("strikethrough", help: "Strikethrough") { editor.toggleStrikethrough() }
+                Spacer()
+                formatButton("gearshape", help: "Notebook settings") { model.openSettings() }
             }
-            Rectangle().fill(Color.dsLine).frame(width: 1, height: 16)
-            formatButton("textformat.size.larger", help: "Title") {
-                editor.applyHeading(font: config.font(for: .title))
+            .padding(.horizontal, 14)
+            .frame(height: 38)
+
+            HStack(spacing: 6) {
+                formatButton("paintbrush.pointed", help: "Text color") { showTextColors.toggle() }
+                    .popover(isPresented: $showTextColors, arrowEdge: .bottom) {
+                        colorGrid(Self.textColors, clearTitle: nil) { color in
+                            editor.applyColor(color ?? DS.paper)
+                        }
+                    }
+                formatButton("highlighter", help: "Highlight") { showHighlights.toggle() }
+                    .popover(isPresented: $showHighlights, arrowEdge: .bottom) {
+                        colorGrid(Self.highlightColors, clearTitle: "None") { color in
+                            editor.applyHighlight(color)
+                        }
+                    }
+                formatButton("textformat.size.smaller", help: "Text size") { showSizes.toggle() }
+                    .popover(isPresented: $showSizes, arrowEdge: .bottom) {
+                        sizeGrid
+                    }
+                Rectangle().fill(Color.dsLine).frame(width: 1, height: 16)
+                formatButton("list.bullet", help: "Bullet list") { editor.toggleBullets() }
+                formatButton("rectangle.split.1x2", help: "Page split") {
+                    editor.insertDivider(bodyFont: config.font(for: .body))
+                }
+                Rectangle().fill(Color.dsLine).frame(width: 1, height: 16)
+                formatButton("text.alignleft", help: "Align left") { editor.applyAlignment(.left) }
+                formatButton("text.aligncenter", help: "Align center") { editor.applyAlignment(.center) }
+                formatButton("text.alignright", help: "Align right") { editor.applyAlignment(.right) }
+                Spacer()
             }
-            formatButton("textformat.size", help: "Heading") {
-                editor.applyHeading(font: config.font(for: .heading))
-            }
-            formatButton("textformat", help: "Body text") {
-                editor.applyHeading(font: config.font(for: .body))
-            }
-            Rectangle().fill(Color.dsLine).frame(width: 1, height: 16)
-            formatButton("bold", help: "Bold") { editor.toggleBold() }
-            formatButton("list.bullet", help: "Bullet list") { editor.toggleBullets() }
-            formatButton("rectangle.split.1x2", help: "Page split") {
-                editor.insertDivider(bodyFont: config.font(for: .body))
-            }
-            Rectangle().fill(Color.dsLine).frame(width: 1, height: 16)
-            colorSwatch(DS.paper, name: "Paper")
-            colorSwatch(DS.accent, name: "Red")
-            colorSwatch(DS.muted, name: "Muted")
-            Spacer()
-            formatButton("gearshape", help: "Notebook settings") { model.openSettings() }
+            .padding(.horizontal, 14)
+            .frame(height: 38)
         }
-        .padding(.horizontal, 14)
-        .frame(height: 40)
+    }
+
+    private func colorGrid(_ colors: [(NSColor, String)], clearTitle: String?,
+                           onPick: @escaping (NSColor?) -> Void) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            LazyVGrid(columns: Array(repeating: GridItem(.fixed(26), spacing: 6), count: 7),
+                      spacing: 6) {
+                ForEach(Array(colors.enumerated()), id: \.offset) { _, entry in
+                    Button {
+                        onPick(entry.0)
+                    } label: {
+                        Circle()
+                            .fill(Color(nsColor: entry.0))
+                            .frame(width: 20, height: 20)
+                            .overlay(Circle().strokeBorder(Color.dsLine, lineWidth: 1))
+                    }
+                    .buttonStyle(.plain)
+                    .help(entry.1)
+                }
+            }
+            if let clearTitle {
+                Button(clearTitle) { onPick(nil) }
+                    .buttonStyle(GhostButtonStyle())
+            }
+        }
+        .padding(12)
+        .background(Color.dsInk1)
+    }
+
+    private var sizeGrid: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(Self.fontSizes, id: \.self) { size in
+                Button {
+                    editor.applyFontSize(size)
+                    showSizes = false
+                } label: {
+                    Text("\(Int(size)) pt")
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundStyle(Color.dsPaper)
+                        .frame(width: 64, alignment: .leading)
+                        .padding(.vertical, 3)
+                        .padding(.horizontal, 8)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(8)
+        .background(Color.dsInk1)
     }
 
     private func formatButton(_ symbol: String, help: String, action: @escaping () -> Void) -> some View {
@@ -538,19 +639,6 @@ struct NotebookView: View {
         .help(help)
     }
 
-    private func colorSwatch(_ color: NSColor, name: String) -> some View {
-        Button {
-            editor.applyColor(color)
-        } label: {
-            Circle()
-                .fill(Color(nsColor: color))
-                .frame(width: 14, height: 14)
-                .overlay(Circle().strokeBorder(Color.dsLine, lineWidth: 1))
-                .frame(width: 24, height: 26)
-        }
-        .buttonStyle(.plain)
-        .help("Text color: \(name)")
-    }
 }
 
 private struct NoteRow: View {
@@ -669,22 +757,32 @@ final class RichTextEditorProxy: ObservableObject {
     }
 
     func toggleBold() {
+        toggleFontTrait(.bold, mask: .boldFontMask)
+    }
+
+    func toggleItalic() {
+        toggleFontTrait(.italic, mask: .italicFontMask)
+    }
+
+    private func toggleFontTrait(_ trait: NSFontDescriptor.SymbolicTraits,
+                                 mask: NSFontTraitMask) {
         guard let tv = textView, let storage = tv.textStorage else { return }
         let range = tv.selectedRange()
         let manager = NSFontManager.shared
         if range.length > 0 {
-            // The selection is bold only if every run is; toggling makes it uniform.
-            var allBold = true
+            // The selection has the trait only if every run does; toggling makes
+            // it uniform.
+            var allHave = true
             storage.enumerateAttribute(.font, in: range) { value, _, _ in
                 let font = value as? NSFont ?? NSFont.systemFont(ofSize: 13)
-                if !font.fontDescriptor.symbolicTraits.contains(.bold) { allBold = false }
+                if !font.fontDescriptor.symbolicTraits.contains(trait) { allHave = false }
             }
             storage.beginEditing()
             storage.enumerateAttribute(.font, in: range) { value, sub, _ in
                 let font = value as? NSFont ?? NSFont.systemFont(ofSize: 13)
-                let newFont = allBold
-                    ? manager.convert(font, toNotHaveTrait: .boldFontMask)
-                    : manager.convert(font, toHaveTrait: .boldFontMask)
+                let newFont = allHave
+                    ? manager.convert(font, toNotHaveTrait: mask)
+                    : manager.convert(font, toHaveTrait: mask)
                 storage.addAttribute(.font, value: newFont, range: sub)
             }
             storage.endEditing()
@@ -692,12 +790,113 @@ final class RichTextEditorProxy: ObservableObject {
         } else {
             var attrs = tv.typingAttributes
             let font = attrs[.font] as? NSFont ?? NSFont.systemFont(ofSize: 13)
-            let isBold = font.fontDescriptor.symbolicTraits.contains(.bold)
-            attrs[.font] = isBold
-                ? manager.convert(font, toNotHaveTrait: .boldFontMask)
-                : manager.convert(font, toHaveTrait: .boldFontMask)
+            let has = font.fontDescriptor.symbolicTraits.contains(trait)
+            attrs[.font] = has
+                ? manager.convert(font, toNotHaveTrait: mask)
+                : manager.convert(font, toHaveTrait: mask)
             tv.typingAttributes = attrs
         }
+    }
+
+    func toggleUnderline() {
+        toggleLineStyle(.underlineStyle)
+    }
+
+    func toggleStrikethrough() {
+        toggleLineStyle(.strikethroughStyle)
+    }
+
+    private func toggleLineStyle(_ key: NSAttributedString.Key) {
+        guard let tv = textView, let storage = tv.textStorage else { return }
+        let range = tv.selectedRange()
+        let single = NSUnderlineStyle.single.rawValue
+        if range.length > 0 {
+            var allHave = true
+            storage.enumerateAttribute(key, in: range) { value, _, _ in
+                if ((value as? Int) ?? 0) == 0 { allHave = false }
+            }
+            storage.beginEditing()
+            if allHave {
+                storage.removeAttribute(key, range: range)
+            } else {
+                storage.addAttribute(key, value: single, range: range)
+            }
+            storage.endEditing()
+            tv.didChangeText()
+        } else {
+            var attrs = tv.typingAttributes
+            let has = ((attrs[key] as? Int) ?? 0) != 0
+            attrs[key] = has ? nil : single
+            tv.typingAttributes = attrs
+        }
+    }
+
+    // Per-selection size keeps each run's family and traits; only points change.
+    func applyFontSize(_ size: Double) {
+        guard let tv = textView, let storage = tv.textStorage else { return }
+        let range = tv.selectedRange()
+        let manager = NSFontManager.shared
+        if range.length > 0 {
+            storage.beginEditing()
+            storage.enumerateAttribute(.font, in: range) { value, sub, _ in
+                let font = value as? NSFont ?? NSFont.systemFont(ofSize: 13)
+                storage.addAttribute(
+                    .font, value: manager.convert(font, toSize: size), range: sub)
+            }
+            storage.endEditing()
+            tv.didChangeText()
+        }
+        var attrs = tv.typingAttributes
+        let font = attrs[.font] as? NSFont ?? NSFont.systemFont(ofSize: 13)
+        attrs[.font] = manager.convert(font, toSize: size)
+        tv.typingAttributes = attrs
+    }
+
+    // nil clears the highlight.
+    func applyHighlight(_ color: NSColor?) {
+        guard let tv = textView, let storage = tv.textStorage else { return }
+        let range = tv.selectedRange()
+        if range.length > 0 {
+            if let color {
+                storage.addAttribute(.backgroundColor, value: color, range: range)
+            } else {
+                storage.removeAttribute(.backgroundColor, range: range)
+            }
+            tv.didChangeText()
+        }
+        var attrs = tv.typingAttributes
+        attrs[.backgroundColor] = color
+        tv.typingAttributes = attrs
+    }
+
+    func applyAlignment(_ alignment: NSTextAlignment) {
+        guard let tv = textView, let storage = tv.textStorage else { return }
+        let text = storage.string as NSString
+        guard storage.length > 0 else {
+            setTypingAlignment(alignment, on: tv)
+            return
+        }
+        let range = text.paragraphRange(for: tv.selectedRange())
+        storage.beginEditing()
+        storage.enumerateAttribute(.paragraphStyle, in: range) { value, sub, _ in
+            // Mutate a copy so bullet indents on the same paragraph survive.
+            let style = (value as? NSParagraphStyle)?.mutableCopy() as? NSMutableParagraphStyle
+                ?? NSMutableParagraphStyle()
+            style.alignment = alignment
+            storage.addAttribute(.paragraphStyle, value: style, range: sub)
+        }
+        storage.endEditing()
+        tv.didChangeText()
+        setTypingAlignment(alignment, on: tv)
+    }
+
+    private func setTypingAlignment(_ alignment: NSTextAlignment, on tv: NSTextView) {
+        var attrs = tv.typingAttributes
+        let style = (attrs[.paragraphStyle] as? NSParagraphStyle)?.mutableCopy()
+            as? NSMutableParagraphStyle ?? NSMutableParagraphStyle()
+        style.alignment = alignment
+        attrs[.paragraphStyle] = style
+        tv.typingAttributes = attrs
     }
 
     // Titles/headings apply per paragraph: partial-line headings read as noise.

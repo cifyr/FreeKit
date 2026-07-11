@@ -5,7 +5,7 @@ import Foundation
 // fixed-interval clicking with an optional total-count limit (not
 // hold-to-repeat or pattern playback).
 public struct AutoclickPlan: Equatable {
-    public enum Button: String, CaseIterable {
+    public enum Button: String, CaseIterable, Codable {
         case left, right
 
         public var displayName: String {
@@ -16,7 +16,7 @@ public struct AutoclickPlan: Equatable {
         }
     }
 
-    public enum ClickType: String, CaseIterable {
+    public enum ClickType: String, CaseIterable, Codable {
         case single, double
 
         public var displayName: String {

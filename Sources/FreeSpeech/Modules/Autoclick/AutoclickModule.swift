@@ -16,6 +16,7 @@ final class AutoclickModule: NSObject, AppModule, NSMenuDelegate {
     private var timer: DispatchSourceTimer?
     private var clicksPerformed = 0
     private var lastPostedPosition: CGPoint?
+    private let macroRunner = MacroRunner()
     private let paneModel = AutoclickPaneModel()
     private lazy var settingsWindow = ModuleSettingsWindowController(info: info) { [weak self] in
         self?.makeSettingsPane() ?? AnyView(EmptyView())
@@ -30,6 +31,19 @@ final class AutoclickModule: NSObject, AppModule, NSMenuDelegate {
         static let stopOnMove = "stopOnMove"
         static let pointX = "pointX"
         static let pointY = "pointY"
+        static let mode = "mode"    // simple | macro
+        static let macro = "macro"  // Macro JSON
+    }
+
+    enum Mode: String, CaseIterable {
+        case simple, macro
+
+        var displayName: String {
+            switch self {
+            case .simple: return "Autoclick"
+            case .macro: return "Macro"
+            }
+        }
     }
 
     // Ctrl+Opt+T: "tap", mirrors Notebook's Ctrl+Opt namespace.
@@ -67,7 +81,20 @@ final class AutoclickModule: NSObject, AppModule, NSMenuDelegate {
             y: settings.moduleDouble(id: info.id, key: Key.pointY) ?? 0)
     }
 
-    var isRunning: Bool { timer != nil }
+    var isRunning: Bool { timer != nil || macroRunner.isRunning }
+
+    var mode: Mode {
+        settings.moduleString(id: info.id, key: Key.mode).flatMap(Mode.init) ?? .simple
+    }
+
+    var storedMacro: Macro {
+        settings.moduleString(id: info.id, key: Key.macro)
+            .flatMap(Macro.decode) ?? Macro()
+    }
+
+    func storeMacro(_ macro: Macro) {
+        settings.setModuleString(macro.encodedJSON(), id: info.id, key: Key.macro)
+    }
 
     func activate() {
         if hotkeyToken == nil {
@@ -114,17 +141,35 @@ final class AutoclickModule: NSObject, AppModule, NSMenuDelegate {
     // MARK: - Clicking
 
     func toggleClicking() {
-        isRunning ? stopClicking() : startClicking()
-    }
-
-    private func startClicking() {
-        guard !isRunning else { return }
+        if isRunning {
+            stopClicking()
+            return
+        }
         // Synthetic events need Accessibility; usually granted already for the
         // shared tap, but the coach covers a fresh install.
         guard Permissions.accessibilityTrusted(promptIfNeeded: true) else {
             permissionCoach.show(.accessibility)
             return
         }
+        switch mode {
+        case .simple:
+            startClicking()
+        case .macro:
+            let macro = storedMacro
+            guard !macro.steps.isEmpty else {
+                Log.error("macro: start requested with no steps recorded")
+                return
+            }
+            macroRunner.onStateChange = { [weak self] in
+                self?.updateStatusIcon()
+                self?.paneModel.objectWillChange.send()
+            }
+            macroRunner.start(macro: macro)
+        }
+    }
+
+    private func startClicking() {
+        guard timer == nil else { return }
         let plan = Self.currentPlan(settings: settings)
         clicksPerformed = 0
         lastPostedPosition = nil
@@ -158,10 +203,14 @@ final class AutoclickModule: NSObject, AppModule, NSMenuDelegate {
     }
 
     private func stopClicking() {
-        guard let timer else { return }
-        timer.cancel()
-        self.timer = nil
-        Log.info("autoclick: stopped after \(clicksPerformed) clicks")
+        if macroRunner.isRunning {
+            macroRunner.stop()
+        }
+        if let timer {
+            timer.cancel()
+            self.timer = nil
+            Log.info("autoclick: stopped after \(clicksPerformed) clicks")
+        }
         updateStatusIcon()
         paneModel.objectWillChange.send()
     }
@@ -223,18 +272,27 @@ final class AutoclickModule: NSObject, AppModule, NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
         menu.autoenablesItems = false
-        let plan = Self.currentPlan(settings: settings)
-        let status = NSMenuItem(
-            title: isRunning
-                ? "Clicking — \(clicksPerformed) so far"
-                : String(format: "Idle — %.2fs interval, %@", plan.interval,
-                         plan.maxClicks.map { "\($0) clicks" } ?? "until stopped"),
-            action: nil, keyEquivalent: "")
+        let statusTitle: String
+        switch (mode, isRunning) {
+        case (.simple, true):
+            statusTitle = "Clicking — \(clicksPerformed) so far"
+        case (.simple, false):
+            let plan = Self.currentPlan(settings: settings)
+            statusTitle = String(
+                format: "Idle — %.2fs interval, %@", plan.interval,
+                plan.maxClicks.map { "\($0) clicks" } ?? "until stopped")
+        case (.macro, true):
+            statusTitle = "Macro running — pass \(macroRunner.runsCompleted + 1)"
+        case (.macro, false):
+            statusTitle = "Macro — \(storedMacro.steps.count) steps"
+        }
+        let status = NSMenuItem(title: statusTitle, action: nil, keyEquivalent: "")
         status.isEnabled = false
         menu.addItem(status)
         menu.addItem(.separator())
+        let verb = mode == .macro ? "Macro" : "Clicking"
         let toggle = NSMenuItem(
-            title: isRunning ? "Stop Clicking" : "Start Clicking (\(hotkey.displayName))",
+            title: isRunning ? "Stop \(verb)" : "Start \(verb) (\(hotkey.displayName))",
             action: #selector(menuToggle), keyEquivalent: "")
         toggle.target = self
         menu.addItem(toggle)
@@ -258,12 +316,119 @@ final class AutoclickModule: NSObject, AppModule, NSMenuDelegate {
     }
 }
 
+// MARK: - Macro execution
+
+// Interprets a Core Macro: clicks, key chords, and waits chained with
+// asyncAfter on the main queue so stop() can cut in between any two steps.
+final class MacroRunner {
+    private(set) var isRunning = false
+    private(set) var runsCompleted = 0
+    private var generation = 0
+    var onStateChange: (() -> Void)?
+
+    func start(macro: Macro) {
+        guard !isRunning, !macro.steps.isEmpty else { return }
+        isRunning = true
+        runsCompleted = 0
+        generation += 1
+        Log.info("macro: start — \(macro.steps.count) steps, repeat=\(macro.repeatCount == 0 ? "until stopped" : String(macro.repeatCount))")
+        run(macro: macro, stepIndex: 0, generation: generation)
+        onStateChange?()
+    }
+
+    func stop() {
+        guard isRunning else { return }
+        // Bumping the generation orphans any queued asyncAfter continuation.
+        generation += 1
+        isRunning = false
+        Log.info("macro: stopped after \(runsCompleted) completed passes")
+        onStateChange?()
+    }
+
+    private func run(macro: Macro, stepIndex: Int, generation: Int) {
+        guard isRunning, generation == self.generation else { return }
+        if stepIndex >= macro.steps.count {
+            runsCompleted += 1
+            if macro.isComplete(afterRuns: runsCompleted) {
+                Log.info("macro: completed \(runsCompleted) passes")
+                isRunning = false
+                onStateChange?()
+                return
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + macro.interval) { [weak self] in
+                self?.run(macro: macro, stepIndex: 0, generation: generation)
+            }
+            return
+        }
+
+        let step = macro.steps[stepIndex]
+        var delay = macro.stepGap
+        switch step {
+        case .click(let button, let type, let x, let y):
+            let position: CGPoint
+            if let x, let y {
+                position = CGPoint(x: x, y: y)
+            } else {
+                position = CGEvent(source: nil)?.location ?? .zero
+            }
+            Self.postClick(button: button, type: type, at: position)
+        case .key(let keyCode, let modifiers):
+            Self.postKey(keyCode: keyCode, modifiers: modifiers)
+        case .wait(let seconds):
+            delay = seconds
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            self?.run(macro: macro, stepIndex: stepIndex + 1, generation: generation)
+        }
+    }
+
+    static func postClick(button: AutoclickPlan.Button, type: AutoclickPlan.ClickType,
+                          at position: CGPoint) {
+        let (downType, upType, mouseButton): (CGEventType, CGEventType, CGMouseButton) =
+            button == .left
+            ? (.leftMouseDown, .leftMouseUp, .left)
+            : (.rightMouseDown, .rightMouseUp, .right)
+        for press in 1...type.pressesPerTick {
+            guard let down = CGEvent(
+                    mouseEventSource: nil, mouseType: downType,
+                    mouseCursorPosition: position, mouseButton: mouseButton),
+                  let up = CGEvent(
+                    mouseEventSource: nil, mouseType: upType,
+                    mouseCursorPosition: position, mouseButton: mouseButton) else {
+                Log.error("macro: failed to build click events at \(position)")
+                return
+            }
+            down.setIntegerValueField(.mouseEventClickState, value: Int64(press))
+            up.setIntegerValueField(.mouseEventClickState, value: Int64(press))
+            down.post(tap: .cghidEventTap)
+            up.post(tap: .cghidEventTap)
+        }
+    }
+
+    static func postKey(keyCode: Int64, modifiers: UInt64) {
+        guard let down = CGEvent(
+                keyboardEventSource: nil, virtualKey: CGKeyCode(keyCode), keyDown: true),
+              let up = CGEvent(
+                keyboardEventSource: nil, virtualKey: CGKeyCode(keyCode), keyDown: false) else {
+            Log.error("macro: failed to build key events for keyCode \(keyCode)")
+            return
+        }
+        let flags = CGEventFlags(rawValue: modifiers)
+        down.flags = flags
+        up.flags = flags
+        down.post(tap: .cghidEventTap)
+        up.post(tap: .cghidEventTap)
+    }
+}
+
 // MARK: - Settings pane
 
 // Bridges the module to SwiftUI so Start/Stop state and captured points refresh.
 final class AutoclickPaneModel: ObservableObject {
     weak var module: AutoclickModule?
     @Published var captureCountdown: Int?
+    @Published var stepCaptureCountdown: Int?
 }
 
 private struct AutoclickSettingsPane: View {
@@ -271,6 +436,7 @@ private struct AutoclickSettingsPane: View {
     let settings: Settings
 
     private let moduleID = ModuleCatalog.autoclicker.id
+    @State private var mode: AutoclickModule.Mode
     @State private var interval: Double
     @State private var maxClicks: Double
     @State private var button: AutoclickPlan.Button
@@ -282,6 +448,8 @@ private struct AutoclickSettingsPane: View {
         self.model = model
         self.settings = settings
         let id = ModuleCatalog.autoclicker.id
+        _mode = State(initialValue: settings.moduleString(id: id, key: AutoclickModule.Key.mode)
+            .flatMap(AutoclickModule.Mode.init) ?? .simple)
         _interval = State(initialValue: settings.moduleDouble(id: id, key: AutoclickModule.Key.interval) ?? 0.1)
         _maxClicks = State(initialValue: Double(settings.moduleInt(id: id, key: AutoclickModule.Key.maxClicks) ?? 0))
         _button = State(initialValue: settings.moduleString(id: id, key: AutoclickModule.Key.button)
@@ -301,6 +469,28 @@ private struct AutoclickSettingsPane: View {
                     id: moduleID, defaultPreset: AutoclickModule.defaultHotkey),
                 onChange: { settings.setModuleHotkey($0, id: moduleID) })
 
+            VStack(alignment: .leading, spacing: 8) {
+                DSSectionLabel("Mode")
+                HStack(spacing: 8) {
+                    ForEach(AutoclickModule.Mode.allCases, id: \.rawValue) { value in
+                        DSChip(title: value.displayName, selected: mode == value) {
+                            mode = value
+                            settings.setModuleString(value.rawValue, id: moduleID, key: AutoclickModule.Key.mode)
+                        }
+                    }
+                }
+            }
+
+            if mode == .macro {
+                MacroEditorSection(model: model, settings: settings,
+                                   button: button, clickType: clickType)
+            } else {
+                simpleControls
+            }
+        }
+    }
+
+    @ViewBuilder private var simpleControls: some View {
             VStack(alignment: .leading, spacing: 8) {
                 DSSectionLabel("Interval")
                 HStack(spacing: 8) {
@@ -407,7 +597,6 @@ private struct AutoclickSettingsPane: View {
                             }))
                 }
             }
-        }
     }
 
     private func setInterval(_ value: Double) {
@@ -457,5 +646,215 @@ private struct AutoclickSettingsPane: View {
 
     private func chipTitle(_ interval: Double) -> String {
         interval < 1 ? String(format: "%.0f/s", 1.0 / interval) : String(format: "%.0fs", interval)
+    }
+}
+
+// MARK: - Macro editor
+
+// Builds the step list: clicks use the Click/Button chips from the module's
+// settings at the moment the step is added, key steps record the next chord,
+// waits take the entered duration.
+private struct MacroEditorSection: View {
+    @ObservedObject var model: AutoclickPaneModel
+    let settings: Settings
+    let button: AutoclickPlan.Button
+    let clickType: AutoclickPlan.ClickType
+
+    private let moduleID = ModuleCatalog.autoclicker.id
+    @State private var macro: Macro
+    @State private var waitSeconds: Double = 0.5
+    @State private var recordingKey = false
+    @State private var keyCapture = ShortcutCapture()
+
+    init(model: AutoclickPaneModel, settings: Settings,
+         button: AutoclickPlan.Button, clickType: AutoclickPlan.ClickType) {
+        self.model = model
+        self.settings = settings
+        self.button = button
+        self.clickType = clickType
+        _macro = State(initialValue: settings.moduleString(
+            id: ModuleCatalog.autoclicker.id, key: AutoclickModule.Key.macro)
+            .flatMap(Macro.decode) ?? Macro())
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            DSSectionLabel("Steps")
+            if macro.steps.isEmpty {
+                Text("No steps yet. A macro runs its steps in order, then repeats.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.dsFaint)
+            } else {
+                VStack(spacing: 4) {
+                    ForEach(Array(macro.steps.enumerated()), id: \.offset) { index, step in
+                        stepRow(index: index, step: step)
+                    }
+                }
+            }
+
+            DSSectionLabel("Add step")
+            HStack(spacing: 8) {
+                Button("Click at Cursor") { append(.click(
+                    button: button, type: clickType, x: nil, y: nil)) }
+                    .buttonStyle(GhostButtonStyle())
+                Button(pointButtonTitle) { beginPointCapture() }
+                    .buttonStyle(GhostButtonStyle())
+                    .disabled(model.stepCaptureCountdown != nil)
+                Button(recordingKey ? "Press keys\u{2026}" : "Key Press") { recordKey() }
+                    .buttonStyle(GhostButtonStyle())
+            }
+            HStack(spacing: 8) {
+                Button("Wait") { append(.wait(seconds: waitSeconds)) }
+                    .buttonStyle(GhostButtonStyle())
+                DSNumberField(
+                    placeholder: "sec", value: $waitSeconds, range: 0.01...600,
+                    fractionDigits: 2, onCommit: { waitSeconds = $0 })
+                Text("seconds")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.dsFaint)
+            }
+            Text("Click steps use the Click and Button choices from Autoclick mode at the moment you add them.")
+                .font(.system(size: 11))
+                .foregroundStyle(Color.dsFaint)
+                .fixedSize(horizontal: false, vertical: true)
+
+            DSSectionLabel("Repeat")
+            HStack(spacing: 8) {
+                Text("Runs")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Color.dsMuted)
+                DSNumberField(
+                    placeholder: "runs",
+                    value: Binding(
+                        get: { Double(macro.repeatCount) },
+                        set: { macro.repeatCount = Int($0) }),
+                    range: 0...1_000_000,
+                    fractionDigits: 0,
+                    onCommit: { _ in persist() })
+                Text("0 = until stopped")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.dsFaint)
+                Text("Pause")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Color.dsMuted)
+                    .padding(.leading, 8)
+                DSNumberField(
+                    placeholder: "sec",
+                    value: Binding(
+                        get: { macro.interval },
+                        set: { macro.interval = $0 }),
+                    range: 0...600,
+                    fractionDigits: 2,
+                    onCommit: { _ in persist() })
+                Text("between runs")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.dsFaint)
+            }
+        }
+        .onDisappear { if recordingKey { keyCapture.end(); recordingKey = false } }
+    }
+
+    private func stepRow(index: Int, step: MacroStep) -> some View {
+        HStack(spacing: 8) {
+            Text(String(format: "%02d", index + 1))
+                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                .foregroundStyle(Color.dsFaint)
+            Text(step.summary)
+                .font(.system(size: 12))
+                .foregroundStyle(Color.dsPaper)
+                .lineLimit(1)
+            Spacer()
+            Button {
+                move(index: index, by: -1)
+            } label: {
+                Image(systemName: "chevron.up")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(index == 0 ? Color.dsFaint : Color.dsMuted)
+            }
+            .buttonStyle(.plain)
+            .disabled(index == 0)
+            Button {
+                move(index: index, by: 1)
+            } label: {
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(index == macro.steps.count - 1 ? Color.dsFaint : Color.dsMuted)
+            }
+            .buttonStyle(.plain)
+            .disabled(index == macro.steps.count - 1)
+            Button {
+                macro.steps.remove(at: index)
+                persist()
+            } label: {
+                Image(systemName: "trash")
+                    .font(.system(size: 10))
+                    .foregroundStyle(Color.dsMuted)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(
+            Color.dsInk2,
+            in: RoundedRectangle(cornerRadius: DS.radiusKeycap, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: DS.radiusKeycap, style: .continuous)
+                .strokeBorder(Color.dsLine, lineWidth: 1))
+    }
+
+    private func append(_ step: MacroStep) {
+        macro.steps.append(step)
+        persist()
+    }
+
+    private func move(index: Int, by offset: Int) {
+        let target = index + offset
+        guard macro.steps.indices.contains(index), macro.steps.indices.contains(target) else { return }
+        macro.steps.swapAt(index, target)
+        persist()
+    }
+
+    private func persist() {
+        settings.setModuleString(
+            macro.encodedJSON(), id: moduleID, key: AutoclickModule.Key.macro)
+    }
+
+    private var pointButtonTitle: String {
+        if let n = model.stepCaptureCountdown { return "Capturing in \(n)\u{2026}" }
+        return "Click at Point (3s)"
+    }
+
+    private func beginPointCapture() {
+        model.stepCaptureCountdown = 3
+        tickPointCapture()
+    }
+
+    private func tickPointCapture() {
+        guard let n = model.stepCaptureCountdown else { return }
+        if n == 0 {
+            let point = AutoclickModule.currentCursorTopLeft()
+            append(.click(
+                button: button, type: clickType,
+                x: Double(point.x), y: Double(point.y)))
+            model.stepCaptureCountdown = nil
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+            model.stepCaptureCountdown = n - 1
+            tickPointCapture()
+        }
+    }
+
+    private func recordKey() {
+        if recordingKey {
+            keyCapture.end()
+            recordingKey = false
+            return
+        }
+        recordingKey = true
+        keyCapture.begin { preset in
+            recordingKey = false
+            append(.key(keyCode: preset.keyCode, modifiers: preset.modifiers.rawValue))
+        }
     }
 }

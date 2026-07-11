@@ -1,44 +1,8 @@
 import AppKit
+import Combine
 import ServiceManagement
 import SwiftUI
 import FreeSpeechCore
-
-// The suite's own always-visible menu bar item: one door into the control
-// center that survives every per-module visibility toggle.
-final class SuiteStatusItem: NSObject {
-    private let statusItem: NSStatusItem
-    private let onOpenControlCenter: () -> Void
-
-    init(onOpenControlCenter: @escaping () -> Void) {
-        self.onOpenControlCenter = onOpenControlCenter
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        super.init()
-        if let button = statusItem.button {
-            button.image = NSImage(
-                systemSymbolName: "square.grid.2x2", accessibilityDescription: "FreeKit")
-            button.toolTip = "FreeKit"
-        }
-        let menu = NSMenu()
-        let open = NSMenuItem(
-            title: "Open FreeKit\u{2026}", action: #selector(openControlCenter), keyEquivalent: "")
-        open.target = self
-        menu.addItem(open)
-        menu.addItem(.separator())
-        let quit = NSMenuItem(title: "Quit FreeKit", action: #selector(quitApp), keyEquivalent: "q")
-        quit.target = self
-        menu.addItem(quit)
-        statusItem.menu = menu
-    }
-
-    @objc private func openControlCenter() {
-        onOpenControlCenter()
-    }
-
-    @objc private func quitApp() {
-        Log.info("quit requested from suite menu")
-        NSApp.terminate(nil)
-    }
-}
 
 final class ControlCenterWindowController {
     private var window: NSWindow?
@@ -76,7 +40,22 @@ final class ControlCenterWindowController {
 // module's inline settings pane. Coming-soon tools render greyed with a badge.
 struct ControlCenterView: View {
     @ObservedObject var registry: ModuleRegistry
+    @ObservedObject private var appearance = AppearanceManager.shared
     @State private var expandedID: String?
+    @State private var selectedSection: Section = .tools
+
+    private enum Section: String, CaseIterable {
+        case tools = "Tools"
+        case appearance = "Appearance"
+        case menuBar = "Menu Bar"
+        case roadmap = "Roadmap"
+    }
+
+    private var visibleModules: [ModuleInfo] {
+        registry.modules.map(\.info).filter {
+            selectedSection == .tools ? $0.status == .available : $0.status == .comingSoon
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -91,30 +70,327 @@ struct ControlCenterView: View {
                 Text("One process, one menu bar, many small tools. Enable what you use.")
                     .font(.system(size: 12))
                     .foregroundStyle(Color.dsMuted)
-            }
-            ScrollView {
-                LazyVStack(spacing: 10) {
-                    ForEach(registry.modules.map(\.info)) { info in
-                        ModuleCard(
-                            registry: registry,
-                            info: info,
-                            expanded: expandedID == info.id,
-                            onToggleExpanded: {
-                                withAnimation(.easeOut(duration: DS.durBase)) {
-                                    expandedID = expandedID == info.id ? nil : info.id
-                                }
-                            })
+                HStack(spacing: 22) {
+                    ForEach(Section.allCases, id: \.self) { section in
+                        DSTabButton(
+                            title: section.rawValue,
+                            selected: selectedSection == section
+                        ) {
+                            selectedSection = section
+                            expandedID = nil
+                        }
                     }
+                    Spacer()
                 }
-                .padding(.bottom, 12)
+                .padding(.top, 8)
+            }
+            if selectedSection == .appearance {
+                AppearancePane()
+            } else if selectedSection == .menuBar {
+                MenuBarPane(registry: registry)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: appearance.density.contentSpacing) {
+                        ForEach(visibleModules) { info in
+                            ModuleCard(
+                                registry: registry,
+                                info: info,
+                                expanded: expandedID == info.id,
+                                onToggleExpanded: {
+                                    withAnimation(.easeOut(duration: DS.durBase)) {
+                                        expandedID = expandedID == info.id ? nil : info.id
+                                    }
+                                })
+                        }
+                    }
+                    .padding(.bottom, 12)
+                }
             }
             SuitePrefsFooter()
         }
         .padding(20)
         .frame(minWidth: 560, idealWidth: 600, maxWidth: .infinity,
                minHeight: 480, idealHeight: 720, maxHeight: .infinity)
-        .background(Color.dsInk0)
+        .background(AppearanceBackground())
     }
+}
+
+private struct MenuBarPane: View {
+    @ObservedObject var registry: ModuleRegistry
+    @ObservedObject private var appearance = AppearanceManager.shared
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: appearance.density.contentSpacing) {
+                DSSettingsCard(title: "FreeKit Menu") {
+                    Text("Choose the suite icon")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Color.dsPaper)
+                    HStack(spacing: 8) {
+                        ForEach(SuiteMenuIcon.allCases) { option in
+                            Button {
+                                appearance.suiteMenuIcon = option
+                            } label: {
+                                VStack(spacing: 7) {
+                                    Image(systemName: option.symbolName)
+                                        .font(.system(size: 15, weight: .semibold))
+                                        .foregroundStyle(
+                                            appearance.suiteMenuIcon == option
+                                                ? Color.dsAccent : Color.dsPaper)
+                                    Text(option.rawValue)
+                                        .font(.system(size: 10, weight: .medium))
+                                        .foregroundStyle(Color.dsMuted)
+                                }
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 54)
+                                .background(Color.dsInk2,
+                                            in: RoundedRectangle(
+                                                cornerRadius: DS.radiusKeycap,
+                                                style: .continuous))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: DS.radiusKeycap, style: .continuous)
+                                        .strokeBorder(
+                                            appearance.suiteMenuIcon == option
+                                                ? Color.dsAccent.opacity(0.6) : Color.dsLine,
+                                            lineWidth: 1))
+                            }
+                            .buttonStyle(.plain)
+                            .help("Use the \(option.rawValue.lowercased()) icon")
+                        }
+                    }
+                    DSToggleRow(
+                        title: "Quick tool controls",
+                        caption: "Show an enable or disable submenu in the FreeKit menu.",
+                        isOn: $appearance.suiteMenuQuickTools)
+                }
+
+                DSSettingsCard(title: "Module Icons") {
+                    ForEach(registry.modules.map(\.info).filter {
+                        $0.status == .available && $0.ownsMenuBarItem
+                    }) { info in
+                        HStack(spacing: 12) {
+                            Image(systemName: info.symbolName)
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundStyle(
+                                    registry.showsMenuBarItem(id: info.id)
+                                        ? Color.dsAccent : Color.dsMuted)
+                                .frame(width: 24)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(info.displayName)
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundStyle(Color.dsPaper)
+                                Text(registry.isEnabled(id: info.id) ? "Tool enabled" : "Tool disabled")
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(Color.dsFaint)
+                            }
+                            Spacer()
+                            DSCheckbox(isOn: Binding(
+                                get: { registry.showsMenuBarItem(id: info.id) },
+                                set: { registry.setShowsMenuBarItem($0, id: info.id) }))
+                                .disabled(!registry.isEnabled(id: info.id))
+                                .opacity(registry.isEnabled(id: info.id) ? 1 : 0.4)
+                        }
+                        .frame(minHeight: 34)
+                    }
+                }
+
+                Text("FreeKit can manage its own status items. macOS does not expose a supported API for rearranging other apps' menu bar items.")
+                    .font(.system(size: 10))
+                    .foregroundStyle(Color.dsFaint)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 2)
+            }
+            .padding(.bottom, 12)
+        }
+    }
+}
+
+private struct AppearancePane: View {
+    @ObservedObject private var appearance = AppearanceManager.shared
+
+    private let accentPresets: [(name: String, hex: String)] = [
+        ("Red", "FF453A"),
+        ("Orange", "FF9F0A"),
+        ("Mint", "63E6BE"),
+        ("Blue", "0A84FF"),
+        ("Violet", "BF5AF2"),
+    ]
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: appearance.density.contentSpacing) {
+                preview
+
+                DSSettingsCard(title: "Accent") {
+                    HStack(spacing: 10) {
+                        ForEach(accentPresets, id: \.hex) { preset in
+                            Button {
+                                appearance.accentHex = preset.hex
+                            } label: {
+                                VStack(spacing: 6) {
+                                    Circle()
+                                        .fill(Color(nsColor: NSColor(hex: preset.hex) ?? .systemRed))
+                                        .frame(width: 25, height: 25)
+                                        .overlay(
+                                            Circle().strokeBorder(
+                                                appearance.accentHex == preset.hex
+                                                    ? Color.dsPaper : Color.dsLine,
+                                                lineWidth: appearance.accentHex == preset.hex ? 2 : 1))
+                                    Text(preset.name)
+                                        .font(.system(size: 10, weight: .medium))
+                                        .foregroundStyle(Color.dsMuted)
+                                }
+                                .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        ColorPicker("Custom", selection: colorBinding(for: \.accentHex), supportsOpacity: false)
+                            .labelsHidden()
+                            .help("Choose a custom accent color")
+                    }
+                }
+
+                DSSettingsCard(title: "Window Gradient") {
+                    DSToggleRow(
+                        title: "Use gradient backgrounds",
+                        caption: "Applied consistently to every FreeKit window.",
+                        isOn: $appearance.gradientEnabled)
+
+                    if appearance.gradientEnabled {
+                        HStack(spacing: 16) {
+                            colorRow("Start", keyPath: \.gradientStartHex)
+                            colorRow("End", keyPath: \.gradientEndHex)
+                            Spacer()
+                        }
+
+                        HStack(spacing: 8) {
+                            ForEach(AppearanceGradientDirection.allCases) { direction in
+                                DSChip(title: direction.rawValue,
+                                       selected: appearance.gradientDirection == direction) {
+                                    appearance.gradientDirection = direction
+                                }
+                            }
+                        }
+
+                        HStack(spacing: 12) {
+                            Text("Intensity")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(Color.dsPaper)
+                            Slider(value: $appearance.gradientIntensity, in: 0.1...0.85)
+                                .tint(Color.dsAccent)
+                            Text("\(Int(appearance.gradientIntensity * 100))%")
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundStyle(Color.dsMuted)
+                                .frame(width: 34, alignment: .trailing)
+                        }
+                    }
+                }
+
+                DSSettingsCard(title: "Interface Shape") {
+                    choiceRow("Depth", values: AppearanceDepth.allCases,
+                              selected: appearance.depth) { appearance.depth = $0 }
+                    choiceRow("Corners", values: AppearanceCornerStyle.allCases,
+                              selected: appearance.corners) { appearance.corners = $0 }
+                    choiceRow("Density", values: AppearanceDensity.allCases,
+                              selected: appearance.density) { appearance.density = $0 }
+                }
+
+            }
+            .padding(.bottom, 12)
+        }
+    }
+
+    private var preview: some View {
+        HStack(spacing: 14) {
+            Image(systemName: "paintpalette.fill")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(Color.dsAccent)
+                .frame(width: 38, height: 38)
+                .background(Color.dsInk2,
+                            in: RoundedRectangle(cornerRadius: DS.radiusKeycap, style: .continuous))
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Live Preview")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Color.dsPaper)
+                Text("Changes are saved automatically and applied across the suite.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.dsMuted)
+            }
+            Spacer()
+            Button { appearance.reset() } label: {
+                Image(systemName: "arrow.counterclockwise")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Color.dsMuted)
+                    .frame(width: 28, height: 28)
+                    .background(Color.dsInk2, in: Circle())
+            }
+            .buttonStyle(.plain)
+            .help("Reset appearance")
+            Circle()
+                .fill(Color.dsAccent)
+                .frame(width: 10, height: 10)
+        }
+        .padding(appearance.density.cardPadding)
+        .background(Color.dsInk1,
+                    in: RoundedRectangle(cornerRadius: DS.radiusCard, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: DS.radiusCard, style: .continuous)
+                .strokeBorder(Color.dsAccent.opacity(0.35), lineWidth: 1))
+        .shadow(color: depthShadowColor, radius: depthShadowRadius, y: depthShadowY)
+    }
+
+    private func colorRow(_ title: String, keyPath: ReferenceWritableKeyPath<AppearanceManager, String>) -> some View {
+        HStack(spacing: 7) {
+            ColorPicker(title, selection: colorBinding(for: keyPath), supportsOpacity: false)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Color.dsPaper)
+        }
+    }
+
+    private func colorBinding(for keyPath: ReferenceWritableKeyPath<AppearanceManager, String>) -> Binding<Color> {
+        Binding(
+            get: { Color(nsColor: NSColor(hex: appearance[keyPath: keyPath]) ?? .systemRed) },
+            set: { newColor in
+                if let nsColor = NSColor(newColor).usingColorSpace(.sRGB) {
+                    appearance[keyPath: keyPath] = nsColor.hexRGB
+                }
+            })
+    }
+
+    private func choiceRow<Value: CaseIterable & Identifiable & RawRepresentable>(
+        _ title: String,
+        values: Value.AllCases,
+        selected: Value,
+        onSelect: @escaping (Value) -> Void
+    ) -> some View where Value.RawValue == String, Value: Equatable, Value.AllCases: RandomAccessCollection {
+        HStack(spacing: 10) {
+            Text(title)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Color.dsPaper)
+                .frame(width: 58, alignment: .leading)
+            ForEach(values) { value in
+                DSChip(title: value.rawValue, selected: selected == value) { onSelect(value) }
+            }
+        }
+    }
+
+    private var depthShadowColor: Color {
+        switch appearance.depth {
+        case .flat: return .clear
+        case .soft: return .black.opacity(0.18)
+        case .layered: return Color.dsAccent.opacity(0.13)
+        }
+    }
+
+    private var depthShadowRadius: CGFloat {
+        switch appearance.depth {
+        case .flat: return 0
+        case .soft: return 7
+        case .layered: return 13
+        }
+    }
+
+    private var depthShadowY: CGFloat { appearance.depth == .layered ? 5 : 2 }
 }
 
 // Suite-level preferences that belong to no single tool.
@@ -158,6 +434,7 @@ private struct SuitePrefsFooter: View {
 
 private struct ModuleCard: View {
     @ObservedObject var registry: ModuleRegistry
+    @ObservedObject private var appearance = AppearanceManager.shared
     let info: ModuleInfo
     let expanded: Bool
     let onToggleExpanded: () -> Void
@@ -256,7 +533,7 @@ private struct ModuleCard: View {
                     }
                 }
             }
-            .padding(16)
+            .padding(appearance.density.cardPadding + 2)
 
             if expanded, !comingSoon, let module = registry.module(id: info.id),
                module.settingsStyle == .inline {
@@ -277,6 +554,7 @@ private struct ModuleCard: View {
             RoundedRectangle(cornerRadius: DS.radiusCard, style: .continuous)
                 .strokeBorder(Color.dsLine, lineWidth: 1))
         .opacity(comingSoon ? 0.55 : 1)
+        .shadow(color: cardShadowColor, radius: cardShadowRadius, y: cardShadowY)
         .onHover { hovering = $0 }
     }
 
@@ -290,4 +568,22 @@ private struct ModuleCard: View {
         }
         .frame(minWidth: 44)
     }
+
+    private var cardShadowColor: Color {
+        switch appearance.depth {
+        case .flat: return .clear
+        case .soft: return .black.opacity(0.14)
+        case .layered: return .black.opacity(0.3)
+        }
+    }
+
+    private var cardShadowRadius: CGFloat {
+        switch appearance.depth {
+        case .flat: return 0
+        case .soft: return 5
+        case .layered: return 10
+        }
+    }
+
+    private var cardShadowY: CGFloat { appearance.depth == .layered ? 4 : 1 }
 }

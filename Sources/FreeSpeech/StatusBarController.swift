@@ -149,9 +149,8 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             title: "Settings\u{2026}", action: #selector(openSettings), keyEquivalent: ",")
         settingsItem.target = self
         menu.addItem(settingsItem)
-        let quit = NSMenuItem(title: "Quit FreeSpeech", action: #selector(quitApp), keyEquivalent: "q")
-        quit.target = self
-        menu.addItem(quit)
+        // No per-tool Quit: it would kill the whole suite. Quitting lives in
+        // the Dock menu and the app menu (Cmd+Q).
     }
 
     @objc private func selectMode(_ sender: NSMenuItem) {
@@ -194,10 +193,5 @@ final class StatusBarController: NSObject, NSMenuDelegate {
 
     @objc private func undoLastDictation() {
         onUndoLastDictation?()
-    }
-
-    @objc private func quitApp() {
-        Log.info("quit requested from menu")
-        NSApp.terminate(nil)
     }
 }

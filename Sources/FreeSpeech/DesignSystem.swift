@@ -13,14 +13,14 @@ enum DS {
     static let paper = NSColor(srgbRed: 0.961, green: 0.961, blue: 0.941, alpha: 1)  // F5F5F0
     static let muted = NSColor(srgbRed: 0.557, green: 0.557, blue: 0.600, alpha: 1)  // 8E8E99
     static let faint = NSColor(srgbRed: 0.333, green: 0.333, blue: 0.373, alpha: 1)  // 55555F
-    static let accent = NSColor(srgbRed: 1.0, green: 0.271, blue: 0.227, alpha: 1)   // FF453A
-    static let accentDim = NSColor(srgbRed: 0.792, green: 0.227, blue: 0.196, alpha: 1) // CA3A32
+    static var accent: NSColor { AppearanceManager.shared.accentColor }
+    static var accentDim: NSColor { AppearanceManager.shared.accentDimColor }
     static let glass = NSColor(srgbRed: 0.075, green: 0.075, blue: 0.094, alpha: 0.85)
     // Hover overlay for transparent controls; ink3 is the hover/selected fill.
     static let controlHover = NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 0.05)
 
-    static let radiusControl: CGFloat = 14
-    static let radiusCard: CGFloat = 20
+    static var radiusControl: CGFloat { AppearanceManager.shared.corners.controlRadius }
+    static var radiusCard: CGFloat { AppearanceManager.shared.corners.cardRadius }
     static let radiusSheet: CGFloat = 28
     static let radiusKeycap: CGFloat = 10
 
@@ -186,6 +186,6 @@ extension Color {
     static let dsPaper = Color(nsColor: DS.paper)
     static let dsMuted = Color(nsColor: DS.muted)
     static let dsFaint = Color(nsColor: DS.faint)
-    static let dsAccent = Color(nsColor: DS.accent)
-    static let dsAccentDim = Color(nsColor: DS.accentDim)
+    static var dsAccent: Color { Color(nsColor: DS.accent) }
+    static var dsAccentDim: Color { Color(nsColor: DS.accentDim) }
 }

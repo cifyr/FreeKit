@@ -141,6 +141,10 @@ final class EventTapHub {
         default: return false
         }
 
+        // The focused recorder's local monitor must receive the raw event, but
+        // no global shortcut or remap may react while that recorder is active.
+        if ShortcutCaptureGate.isActive { return false }
+
         for rewriter in rewriters {
             if case .swallow = rewriter.rewrite(kind: kind, event: event) {
                 return true

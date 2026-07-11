@@ -96,11 +96,18 @@ final class OnboardingStore: ObservableObject {
 
     func recordHotkey(_ target: CaptureTarget) {
         capturing = target
-        shortcutCapture.begin { [weak self] preset in
-            guard let self else { return }
-            self.apply(preset, to: target)
-            self.capturing = nil
-        }
+        shortcutCapture.begin(
+            onSet: { [weak self] preset in
+                guard let self else { return }
+                self.apply(preset, to: target)
+                self.capturing = nil
+            },
+            onClear: { [weak self] in
+                guard let self else { return }
+                self.apply(.disabled, to: target)
+                self.capturing = nil
+            },
+            onCancel: { [weak self] in self?.capturing = nil })
     }
 
     func cancelRecord() {
@@ -145,6 +152,7 @@ struct OnboardingDeps {
 
 struct OnboardingView: View {
     @ObservedObject var store: OnboardingStore
+    @ObservedObject private var appearance = AppearanceManager.shared
     @FocusState private var practiceFocused: Bool
 
     var body: some View {
@@ -170,7 +178,7 @@ struct OnboardingView: View {
             footer
         }
         .frame(width: 520, height: 600)
-        .background(Color.dsInk0)
+        .background(AppearanceBackground())
         .onChange(of: store.step) { _, newStep in
             practiceFocused = (newStep == .practice)
         }

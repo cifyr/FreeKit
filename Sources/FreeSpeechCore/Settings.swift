@@ -58,11 +58,14 @@ public struct HotkeyPreset: Equatable, Identifiable {
         id: "rightCommand", displayName: "Right Command (hold)", keyCode: 54, kind: .modifier)
     public static let f13 = HotkeyPreset(
         id: "f13", displayName: "F13", keyCode: 105, kind: .key)
+    public static let disabled = HotkeyPreset(
+        id: "disabled", displayName: "Not Set", keyCode: -1, kind: .key)
 
     public static let all: [HotkeyPreset] = [.rightOption, .rightCommand, .f13]
 
     public static func find(id: String) -> HotkeyPreset? {
-        all.first { $0.id == id }
+        if id == disabled.id { return disabled }
+        return all.first { $0.id == id }
     }
 
     // Anything the user records in settings becomes a custom preset: a bare modifier,

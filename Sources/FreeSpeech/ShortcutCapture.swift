@@ -1,25 +1,60 @@
 import AppKit
 import FreeSpeechCore
 
-// Reusable global-chord capture: records the next keypress, combo (Cmd+K, Cmd+Opt+Space),
-// or bare modifier (press and release it alone) as a HotkeyPreset. Esc cancels.
+// While any recorder owns a session, the global event tap bypasses every
+// registered shortcut so recording a new chord can never trigger an old one.
+enum ShortcutCaptureGate {
+    private static var sessions: Set<UUID> = []
+
+    static var isActive: Bool { !sessions.isEmpty }
+
+    static func activate() -> UUID {
+        let id = UUID()
+        sessions.insert(id)
+        return id
+    }
+
+    static func deactivate(_ id: UUID?) {
+        guard let id else { return }
+        sessions.remove(id)
+    }
+}
+
+// Reusable chord capture: records a keypress, combo, or bare modifier. Escape
+// clears the binding; clicking elsewhere cancels without changing it.
 final class ShortcutCapture {
     private var monitor: Any?
     private var involvedModifiers: Set<Int64> = []
     private var onResult: ((HotkeyPreset) -> Void)?
+    private var onClear: (() -> Void)?
+    private var onCancel: (() -> Void)?
+    private var gateSession: UUID?
 
     var isCapturing: Bool { monitor != nil }
 
     func begin(_ onResult: @escaping (HotkeyPreset) -> Void) {
+        begin(onSet: onResult, onClear: {}, onCancel: {})
+    }
+
+    func begin(
+        onSet: @escaping (HotkeyPreset) -> Void,
+        onClear: @escaping () -> Void,
+        onCancel: @escaping () -> Void
+    ) {
         guard monitor == nil else { return }
-        self.onResult = onResult
+        self.onResult = onSet
+        self.onClear = onClear
+        self.onCancel = onCancel
         involvedModifiers = []
-        monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { [weak self] event in
+        gateSession = ShortcutCaptureGate.activate()
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [
+            .keyDown, .flagsChanged, .leftMouseDown, .rightMouseDown, .otherMouseDown,
+        ]) { [weak self] event in
             guard let self else { return event }
             let code = Int64(event.keyCode)
             switch event.type {
             case .keyDown:
-                if code == 53 { self.end(); return nil }  // Esc cancels
+                if code == 53 { self.clear(); return nil }
                 let flags = event.modifierFlags.intersection([.command, .option, .shift, .control])
                 var mods: HotkeyModifiers = []
                 if flags.contains(.command) { mods.insert(.command) }
@@ -42,6 +77,9 @@ final class ShortcutCapture {
                     self.involvedModifiers = []
                 }
                 return event
+            case .leftMouseDown, .rightMouseDown, .otherMouseDown:
+                self.cancel()
+                return event
             default:
                 return event
             }
@@ -53,11 +91,27 @@ final class ShortcutCapture {
         monitor = nil
         involvedModifiers = []
         onResult = nil
+        onClear = nil
+        onCancel = nil
+        ShortcutCaptureGate.deactivate(gateSession)
+        gateSession = nil
     }
 
     private func finish(_ keyCode: Int64, _ modifiers: HotkeyModifiers) {
         let callback = onResult
         end()
         callback?(HotkeyPreset.custom(keyCode: keyCode, modifiers: modifiers))
+    }
+
+    private func clear() {
+        let callback = onClear
+        end()
+        callback?()
+    }
+
+    private func cancel() {
+        let callback = onCancel
+        end()
+        callback?()
     }
 }

@@ -35,6 +35,25 @@ public enum StatsFormatting {
         return String(format: "%.0f%%", clamped * 100)
     }
 
+    // Per-core usage as a compact bar strip (one glyph per core).
+    public static func coreBars(_ usages: [Double]) -> String {
+        let levels: [Character] = ["\u{2581}", "\u{2582}", "\u{2583}", "\u{2584}",
+                                   "\u{2585}", "\u{2586}", "\u{2587}", "\u{2588}"]
+        return String(usages.map { usage in
+            let clamped = min(max(usage, 0), 1)
+            let index = min(levels.count - 1, Int(clamped * Double(levels.count)))
+            return levels[index]
+        })
+    }
+
+    // Battery-style durations from minutes: "2h 05m", "34m".
+    public static func minutes(_ total: Int) -> String {
+        guard total > 0 else { return "\u{2014}" }
+        let hours = total / 60
+        let mins = total % 60
+        return hours > 0 ? String(format: "%dh %02dm", hours, mins) : "\(mins)m"
+    }
+
     // Compact uptime: the two most significant units only.
     public static func uptime(_ seconds: TimeInterval) -> String {
         let total = max(0, Int(seconds))

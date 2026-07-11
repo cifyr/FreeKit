@@ -24,6 +24,21 @@ final class StatsFormattingTests: XCTestCase {
         XCTAssertEqual(StatsFormatting.percent(-0.2), "0%")
     }
 
+    func testCoreBarsMapUsageToLevels() {
+        XCTAssertEqual(StatsFormatting.coreBars([0, 0.5, 1.0]), "\u{2581}\u{2585}\u{2588}")
+        XCTAssertEqual(StatsFormatting.coreBars([]), "")
+        // Out-of-range values clamp instead of crashing the strip.
+        XCTAssertEqual(StatsFormatting.coreBars([-1, 2]), "\u{2581}\u{2588}")
+    }
+
+    func testMinutesFormatting() {
+        XCTAssertEqual(StatsFormatting.minutes(34), "34m")
+        XCTAssertEqual(StatsFormatting.minutes(125), "2h 05m")
+        // Unknown (-1) and zero read as an em dash, not "0m".
+        XCTAssertEqual(StatsFormatting.minutes(-1), "\u{2014}")
+        XCTAssertEqual(StatsFormatting.minutes(0), "\u{2014}")
+    }
+
     func testUptimeUsesTwoMostSignificantUnits() {
         XCTAssertEqual(StatsFormatting.uptime(59), "0m")
         XCTAssertEqual(StatsFormatting.uptime(35 * 60), "35m")

@@ -49,6 +49,19 @@ final class AutoclickPlanTests: XCTestCase {
         XCTAssertFalse(defaults.stopOnCursorMove)
     }
 
+    func testOptionalTimeLimit() {
+        let unlimited = AutoclickPlan(interval: 0.1)
+        XCTAssertFalse(unlimited.isTimeLimitReached(elapsed: 10_000))
+
+        let limited = AutoclickPlan(interval: 0.1, maxDuration: 30)
+        XCTAssertFalse(limited.isTimeLimitReached(elapsed: 29.9))
+        XCTAssertTrue(limited.isTimeLimitReached(elapsed: 30))
+    }
+
+    func testTimeLimitFloorsAtOneSecond() {
+        XCTAssertEqual(AutoclickPlan(interval: 0.1, maxDuration: -4).maxDuration, 1)
+    }
+
     func testTickScheduleStartsImmediatelyAndSpacesByInterval() {
         let plan = AutoclickPlan(interval: 0.5)
         XCTAssertEqual(plan.tickTimes(count: 4), [0, 0.5, 1.0, 1.5])

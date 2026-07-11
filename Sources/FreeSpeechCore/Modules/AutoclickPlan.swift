@@ -58,16 +58,20 @@ public struct AutoclickPlan: Equatable {
     public var clickType: ClickType
     // Fixed-point safety: moving the physical cursor cancels the run.
     public var stopOnCursorMove: Bool
+    // nil means no time limit.
+    public var maxDuration: TimeInterval?
 
     public init(interval: TimeInterval, maxClicks: Int? = nil,
                 button: Button = .left, target: Target = .cursor,
-                clickType: ClickType = .single, stopOnCursorMove: Bool = false) {
+                clickType: ClickType = .single, stopOnCursorMove: Bool = false,
+                maxDuration: TimeInterval? = nil) {
         self.interval = min(max(interval, Self.minInterval), Self.maxInterval)
         self.maxClicks = maxClicks.map { max(1, $0) }
         self.button = button
         self.target = target
         self.clickType = clickType
         self.stopOnCursorMove = stopOnCursorMove
+        self.maxDuration = maxDuration.map { max(1, $0) }
     }
 
     public var clicksPerSecond: Double { 1.0 / interval }
@@ -82,6 +86,11 @@ public struct AutoclickPlan: Equatable {
     public func isComplete(afterClicks performed: Int) -> Bool {
         guard let maxClicks else { return false }
         return performed >= maxClicks
+    }
+
+    public func isTimeLimitReached(elapsed: TimeInterval) -> Bool {
+        guard let maxDuration else { return false }
+        return elapsed >= maxDuration
     }
 
     // Fire times relative to start; first click fires immediately so a hotkey

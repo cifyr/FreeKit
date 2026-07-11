@@ -8,10 +8,19 @@ import FreeSpeechCore
 final class ModuleSettingsWindowController {
     private var window: NSWindow?
     private let info: ModuleInfo
+    private let contentSize: NSSize
+    private let minimumSize: NSSize
     private let makePane: () -> AnyView
 
-    init(info: ModuleInfo, makePane: @escaping () -> AnyView) {
+    init(
+        info: ModuleInfo,
+        contentSize: NSSize = NSSize(width: 540, height: 620),
+        minimumSize: NSSize = NSSize(width: 480, height: 360),
+        makePane: @escaping () -> AnyView
+    ) {
         self.info = info
+        self.contentSize = contentSize
+        self.minimumSize = minimumSize
         self.makePane = makePane
     }
 
@@ -26,8 +35,8 @@ final class ModuleSettingsWindowController {
             w.titleVisibility = .hidden
             w.appearance = NSAppearance(named: .darkAqua)
             w.backgroundColor = DS.ink0
-            w.minSize = NSSize(width: 460, height: 320)
-            w.setContentSize(NSSize(width: 500, height: 520))
+            w.minSize = minimumSize
+            w.setContentSize(contentSize)
             // Hidden titlebar leaves nothing to grab; drag anywhere instead.
             w.isMovableByWindowBackground = true
             w.isReleasedWhenClosed = false
@@ -43,6 +52,7 @@ final class ModuleSettingsWindowController {
 private struct ModuleSettingsContainer: View {
     let info: ModuleInfo
     let pane: AnyView
+    @ObservedObject private var appearance = AppearanceManager.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -62,9 +72,9 @@ private struct ModuleSettingsContainer: View {
             }
         }
         .padding(20)
-        .frame(minWidth: 460, idealWidth: 500, maxWidth: .infinity,
-               minHeight: 320, idealHeight: 520, maxHeight: .infinity)
-        .background(Color.dsInk0)
+        .frame(minWidth: 480, maxWidth: .infinity,
+               minHeight: 360, maxHeight: .infinity)
+        .background(AppearanceBackground())
     }
 }
 
@@ -75,13 +85,14 @@ private struct ModuleSettingsContainer: View {
 struct DSSettingsCard<Content: View>: View {
     let title: String
     @ViewBuilder let content: Content
+    @ObservedObject private var appearance = AppearanceManager.shared
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: appearance.density.contentSpacing) {
             DSSectionLabel(title)
             content
         }
-        .padding(14)
+        .padding(appearance.density.cardPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             Color.dsInk1,
@@ -89,7 +100,26 @@ struct DSSettingsCard<Content: View>: View {
         .overlay(
             RoundedRectangle(cornerRadius: DS.radiusControl, style: .continuous)
                 .strokeBorder(Color.dsLine, lineWidth: 1))
+        .shadow(color: shadowColor, radius: shadowRadius, y: shadowY)
     }
+
+    private var shadowColor: Color {
+        switch appearance.depth {
+        case .flat: return .clear
+        case .soft: return .black.opacity(0.14)
+        case .layered: return .black.opacity(0.3)
+        }
+    }
+
+    private var shadowRadius: CGFloat {
+        switch appearance.depth {
+        case .flat: return 0
+        case .soft: return 5
+        case .layered: return 10
+        }
+    }
+
+    private var shadowY: CGFloat { appearance.depth == .layered ? 4 : 1 }
 }
 
 struct DSSectionLabel: View {

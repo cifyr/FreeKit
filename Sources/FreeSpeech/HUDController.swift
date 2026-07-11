@@ -20,7 +20,6 @@ final class HUDController {
     private let waveRow = NSView()
     private let statusRow = NSView()
     private let waveform = WaveformLineView()
-    private let sourceTag = NSTextField(labelWithString: "")
     private let dot = NSView()
     private let label = NSTextField(labelWithString: "")
     private var dismissTimer: DispatchWorkItem?
@@ -69,22 +68,14 @@ final class HUDController {
             card.addSubview(row)
         }
         waveform.translatesAutoresizingMaskIntoConstraints = false
-        sourceTag.translatesAutoresizingMaskIntoConstraints = false
         dot.translatesAutoresizingMaskIntoConstraints = false
         label.translatesAutoresizingMaskIntoConstraints = false
         label.alignment = .center
         label.lineBreakMode = .byTruncatingTail
-        sourceTag.wantsLayer = true
-        sourceTag.layer?.backgroundColor = DS.ink2.cgColor
-        sourceTag.layer?.borderColor = DS.accent.withAlphaComponent(0.4).cgColor
-        sourceTag.layer?.borderWidth = 1
-        sourceTag.layer?.cornerRadius = 8
-
         dot.wantsLayer = true
         dot.layer?.backgroundColor = DS.accent.cgColor
         dot.layer?.cornerRadius = 3
 
-        waveRow.addSubview(sourceTag)
         waveRow.addSubview(waveform)
         statusRow.addSubview(dot)
         statusRow.addSubview(label)
@@ -113,9 +104,7 @@ final class HUDController {
             statusRow.trailingAnchor.constraint(equalTo: card.trailingAnchor),
             statusRow.topAnchor.constraint(equalTo: card.topAnchor),
             statusRow.bottomAnchor.constraint(equalTo: card.bottomAnchor),
-            sourceTag.leadingAnchor.constraint(equalTo: waveRow.leadingAnchor, constant: pad),
             sourceTag.centerYAnchor.constraint(equalTo: waveRow.centerYAnchor),
-            waveform.trailingAnchor.constraint(equalTo: waveRow.trailingAnchor, constant: -pad),
             waveform.centerYAnchor.constraint(equalTo: waveRow.centerYAnchor),
             waveform.heightAnchor.constraint(equalToConstant: hudStyle == .microCapsule ? 14 : 18),
             dot.widthAnchor.constraint(equalToConstant: 6),
@@ -133,8 +122,8 @@ final class HUDController {
             ]
         } else {
             waveConstraints += [
-                waveform.leadingAnchor.constraint(
-                    greaterThanOrEqualTo: sourceTag.trailingAnchor, constant: 8),
+                waveform.leadingAnchor.constraint(equalTo: waveRow.leadingAnchor, constant: pad),
+                waveform.trailingAnchor.constraint(equalTo: waveRow.trailingAnchor, constant: -pad),
                 dot.centerYAnchor.constraint(equalTo: statusRow.centerYAnchor),
                 dot.trailingAnchor.constraint(equalTo: label.leadingAnchor, constant: -8),
                 label.centerXAnchor.constraint(equalTo: statusRow.centerXAnchor, constant: 4),
@@ -149,12 +138,12 @@ final class HUDController {
         dismissTimer = nil
 
         switch state {
-        case .recording(let source):
-            showWaveform(source: source)
+        case .recording:
+            showLiveWaveform()
         case .transcribing:
-            showStatus(text: "Transcribing", color: DS.muted, dotStyle: .pulsing)
+            showProcessingWaveform()
         case .processing:
-            showStatus(text: "Polishing", color: DS.muted, dotStyle: .pulsing)
+            showProcessingWaveform()
         case .success:
             if hudStyle == .microCapsule {
                 showGlyph("\u{2713}", color: DS.paper)
@@ -191,22 +180,15 @@ final class HUDController {
 
     // MARK: - State rendering
 
-    private func showWaveform(source: AudioSource) {
+    private func showLiveWaveform() {
         card.layer?.borderColor = DS.line.cgColor
-        // System tag only fits the compact bar; the capsule stays waveform-only.
-        if source == .systemAudio, hudStyle == .compactBar {
-            sourceTag.isHidden = false
-            sourceTag.attributedStringValue = NSAttributedString(
-                string: "  SYSTEM  ",
-                attributes: [
-                    .font: NSFont.monospacedSystemFont(ofSize: 9, weight: .medium),
-                    .kern: 0.6,
-                    .foregroundColor: DS.accent,
-                ])
-        } else {
-            sourceTag.isHidden = true
-        }
-        waveform.startAnimating()
+        waveform.startLiveLevels()
+        crossfade(toWave: true)
+    }
+
+    private func showProcessingWaveform() {
+        card.layer?.borderColor = DS.line.cgColor
+        waveform.startAutomaticWave()
         crossfade(toWave: true)
     }
 
@@ -323,15 +305,17 @@ final class HUDController {
     }
 }
 
-// The always-moving line: a raised-cosine window (edges 0.4, center 1.0) over
-// two summed traveling sines, scaled by live mic amplitude — breathes at idle,
-// rides speech when talking. Exact math from the design handoff.
+// During capture, bars only respond to measured audio. Once capture stops and
+// transcription begins, the same surface switches to a self-running wave.
 final class WaveformLineView: NSView {
+    private enum Mode { case liveLevels, automatic }
+
     private var barCount = 22
     private var gap: CGFloat = 2
     private var phase: Double = 0
     private var envelope: CGFloat = 0
     private var timer: Timer?
+    private var mode: Mode = .liveLevels
 
     private static let frameInterval: TimeInterval = 1.0 / 30.0
 
@@ -351,12 +335,25 @@ final class WaveformLineView: NSView {
         }
     }
 
-    func startAnimating() {
+    func startLiveLevels() {
+        mode = .liveLevels
         envelope = 0
+        phase = 0
+        startTimer()
+    }
+
+    func startAutomaticWave() {
+        mode = .automatic
+        envelope = 0
+        phase = 0
+        startTimer()
+    }
+
+    private func startTimer() {
         guard timer == nil else { return }
         timer = Timer.scheduledTimer(withTimeInterval: Self.frameInterval, repeats: true) { [weak self] _ in
             guard let self else { return }
-            self.phase += Self.frameInterval
+            if self.mode == .automatic { self.phase += Self.frameInterval }
             self.needsDisplay = true
         }
         RunLoop.main.add(timer!, forMode: .common)
@@ -371,15 +368,22 @@ final class WaveformLineView: NSView {
         guard barCount > 1 else { return }
         let barWidth = (bounds.width - gap * CGFloat(barCount - 1)) / CGFloat(barCount)
         guard barWidth > 0 else { return }
-        // Idle sits at 0.7 so the line visibly breathes; speech lifts toward 1.
-        let amp = min(1.0, 0.7 + min(0.5, envelope))
         DS.accent.setFill()
         for i in 0..<barCount {
             let p = Double(i) / Double(barCount - 1)
             let window = 0.4 + 0.6 * sin(.pi * p)
-            let s1 = sin(p * .pi * 2 * 1.4 + phase * 2.1)
-            let s2 = sin(p * .pi * 2 * 0.6 - phase * 1.15)
-            let v = max(0.05, (0.5 + 0.26 * s1 + 0.24 * s2) * window * amp)
+            let v: Double
+            switch mode {
+            case .liveLevels:
+                let strength = min(1.0, Double(envelope) * 3.2)
+                let texture = 0.56 + 0.22 * sin(p * .pi * 5.0)
+                    + 0.18 * cos(p * .pi * 8.0)
+                v = max(0.05, texture * window * strength)
+            case .automatic:
+                let s1 = sin(p * .pi * 2 * 1.4 + phase * 2.1)
+                let s2 = sin(p * .pi * 2 * 0.6 - phase * 1.15)
+                v = max(0.05, (0.5 + 0.26 * s1 + 0.24 * s2) * window)
+            }
             let h = max(2.5, CGFloat(v) * bounds.height)
             let rect = NSRect(
                 x: CGFloat(i) * (barWidth + gap),

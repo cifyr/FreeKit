@@ -24,11 +24,18 @@ struct HotkeyRecorderButton: View {
                     capturing = false
                 } else {
                     capturing = true
-                    capture.begin { newPreset in
-                        capturing = false
-                        preset = newPreset
-                        onChange(newPreset)
-                    }
+                    capture.begin(
+                        onSet: { newPreset in
+                            capturing = false
+                            preset = newPreset
+                            onChange(newPreset)
+                        },
+                        onClear: {
+                            capturing = false
+                            preset = .disabled
+                            onChange(.disabled)
+                        },
+                        onCancel: { capturing = false })
                 }
             } label: {
                 Text(capturing ? "Press keys\u{2026}" : preset.displayName)

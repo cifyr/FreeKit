@@ -12,7 +12,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var registry: ModuleRegistry!
     private var speech: SpeechModule!
     private var controlCenter: ControlCenterWindowController!
-    private var homeItem: SuiteStatusItem!
 
     private var accessibilityPollTimer: Timer?
 
@@ -30,16 +29,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             settings: settings, hub: eventHub, permissionCoach: permissionCoach))
         registry.register(StatsModule(settings: settings))
         registry.register(CapsLockModule(settings: settings, hub: eventHub))
+        registry.register(AppCleanerModule(settings: settings))
         for info in [ModuleCatalog.menuBarManager, ModuleCatalog.cotypist,
-                     ModuleCatalog.appCleaner, ModuleCatalog.linearMouse,
+                     ModuleCatalog.linearMouse,
                      ModuleCatalog.clop, ModuleCatalog.boringNotch] {
             registry.register(PlaceholderModule(info: info))
         }
 
+        // No suite menu bar item: the Dock icon is the door into FreeKit now.
         controlCenter = ControlCenterWindowController(registry: registry)
-        homeItem = SuiteStatusItem(onOpenControlCenter: { [weak self] in
-            self?.controlCenter.show()
-        })
 
         registry.activateEnabledModules()
         installEventTapOrPollForAccessibility()

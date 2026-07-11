@@ -49,6 +49,17 @@ final class NotebookStoreTests: XCTestCase {
         XCTAssertEqual(store.notes().map(\.title), ["new", "old"])
     }
 
+    func testNotesCanSortByTitle() {
+        let store = NotebookStore(directory: directory)
+        store.upsert(Note(title: "Zulu", modified: Date(timeIntervalSince1970: 300)))
+        store.upsert(Note(title: "alpha", modified: Date(timeIntervalSince1970: 100)))
+        store.upsert(Note(title: "Bravo", modified: Date(timeIntervalSince1970: 200)))
+
+        XCTAssertEqual(
+            store.notes(sortedBy: .title).map(\.title),
+            ["alpha", "Bravo", "Zulu"])
+    }
+
     func testSearchMatchesTitleAndContentCaseInsensitive() {
         let store = NotebookStore(directory: directory)
         store.upsert(Note(title: "Meeting notes", plainText: "discuss roadmap"))
@@ -60,6 +71,16 @@ final class NotebookStoreTests: XCTestCase {
         XCTAssertEqual(store.search("absent").count, 0)
         // Blank query returns everything.
         XCTAssertEqual(store.search("  ").count, 3)
+    }
+
+    func testSearchPreservesRequestedSortOrder() {
+        let store = NotebookStore(directory: directory)
+        store.upsert(Note(title: "Zulu match", plainText: "x"))
+        store.upsert(Note(title: "Alpha match", plainText: "x"))
+
+        XCTAssertEqual(
+            store.search("match", sortedBy: .title).map(\.title),
+            ["Alpha match", "Zulu match"])
     }
 
     func testDeleteRemovesFromDisk() {

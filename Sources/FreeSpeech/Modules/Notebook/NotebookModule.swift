@@ -16,7 +16,11 @@ final class NotebookModule: NSObject, AppModule, NSMenuDelegate {
     private var statusItem: NSStatusItem?
     private var panel: NotebookPanelController?
     private var config: NotebookConfig?
-    private lazy var settingsWindow = ModuleSettingsWindowController(info: info) { [weak self] in
+    private lazy var settingsWindow = ModuleSettingsWindowController(
+        info: info,
+        contentSize: NSSize(width: 580, height: 660),
+        minimumSize: NSSize(width: 520, height: 440)
+    ) { [weak self] in
         self?.makeSettingsPane() ?? AnyView(EmptyView())
     }
 
@@ -155,7 +159,7 @@ final class NotebookModule: NSObject, AppModule, NSMenuDelegate {
 
 // MARK: - Config
 
-enum NotebookFont: String, CaseIterable {
+enum NotebookFont: String, CaseIterable, Equatable {
     case system, serif, mono
 
     var displayName: String {
@@ -165,6 +169,12 @@ enum NotebookFont: String, CaseIterable {
         case .mono: return "Mono"
         }
     }
+}
+
+enum NotebookListDensity: String, CaseIterable {
+    case compact, comfortable
+
+    var displayName: String { rawValue.capitalized }
 }
 
 // Settings-backed knobs the panel reacts to live.
@@ -184,6 +194,27 @@ final class NotebookConfig: ObservableObject {
     @Published var floatOnTop: Bool {
         didSet { settings.setModuleBool(floatOnTop, id: id, key: "floatOnTop") }
     }
+    @Published var sidebarWidth: Double {
+        didSet { settings.setModuleDouble(sidebarWidth, id: id, key: "sidebarWidth") }
+    }
+    @Published var listDensity: NotebookListDensity {
+        didSet { settings.setModuleString(listDensity.rawValue, id: id, key: "listDensity") }
+    }
+    @Published var sortOrder: NotebookSortOrder {
+        didSet { settings.setModuleString(sortOrder.rawValue, id: id, key: "sortOrder") }
+    }
+    @Published var showTimestamps: Bool {
+        didSet { settings.setModuleBool(showTimestamps, id: id, key: "showTimestamps") }
+    }
+    @Published var showPreviews: Bool {
+        didSet { settings.setModuleBool(showPreviews, id: id, key: "showPreviews") }
+    }
+    @Published var spellCheck: Bool {
+        didSet { settings.setModuleBool(spellCheck, id: id, key: "spellCheck") }
+    }
+    @Published var smartQuotes: Bool {
+        didSet { settings.setModuleBool(smartQuotes, id: id, key: "smartQuotes") }
+    }
 
     init(settings: Settings) {
         self.settings = settings
@@ -192,6 +223,15 @@ final class NotebookConfig: ObservableObject {
             .flatMap(NotebookFont.init) ?? .system
         sidebarVisible = settings.moduleBool(id: id, key: "sidebarVisible") ?? true
         floatOnTop = settings.moduleBool(id: id, key: "floatOnTop") ?? true
+        sidebarWidth = min(max(settings.moduleDouble(id: id, key: "sidebarWidth") ?? 210, 180), 300)
+        listDensity = settings.moduleString(id: id, key: "listDensity")
+            .flatMap(NotebookListDensity.init) ?? .comfortable
+        sortOrder = settings.moduleString(id: id, key: "sortOrder")
+            .flatMap(NotebookSortOrder.init) ?? .modified
+        showTimestamps = settings.moduleBool(id: id, key: "showTimestamps") ?? true
+        showPreviews = settings.moduleBool(id: id, key: "showPreviews") ?? true
+        spellCheck = settings.moduleBool(id: id, key: "spellCheck") ?? true
+        smartQuotes = settings.moduleBool(id: id, key: "smartQuotes") ?? true
     }
 
     func font(size: Double, weight: NSFont.Weight = .regular) -> NSFont {
@@ -301,7 +341,8 @@ final class NotebookPanelController {
         p.isReleasedWhenClosed = false
         p.minSize = NSSize(width: 480, height: 340)
         p.setContentSize(NSSize(width: 680, height: 440))
-        p.center()
+        if !p.setFrameUsingName("FreeKit.NotebookPanel") { p.center() }
+        p.setFrameAutosaveName("FreeKit.NotebookPanel")
         panel = p
         floatCancellable = config.$floatOnTop.sink { [weak p] onTop in
             p?.level = onTop ? .floating : .normal
@@ -340,7 +381,7 @@ final class NotebookViewModel: ObservableObject {
     }
 
     func refresh() {
-        notes = store.search(query)
+        notes = store.search(query, sortedBy: config.sortOrder)
     }
 
     func focusEditor() {
@@ -454,6 +495,7 @@ final class NotebookViewModel: ObservableObject {
 struct NotebookView: View {
     @ObservedObject var model: NotebookViewModel
     @ObservedObject var config: NotebookConfig
+    @ObservedObject private var appearance = AppearanceManager.shared
     @StateObject private var editor = RichTextEditorProxy()
 
     private static let timeFormatter: DateFormatter = {
@@ -511,9 +553,10 @@ struct NotebookView: View {
                 RichTextEditor(model: model, proxy: editor)
             }
         }
-        .background(Color.dsInk0)
+        .background(AppearanceBackground())
         .frame(minWidth: 480, minHeight: 340)
         .animation(.easeOut(duration: DS.durBase), value: config.sidebarVisible)
+        .onChange(of: config.sortOrder) { _, _ in model.refresh() }
     }
 
     private var sidebar: some View {
@@ -543,6 +586,9 @@ struct NotebookView: View {
                             note: note,
                             selected: model.selectedID == note.id,
                             timeFormatter: Self.timeFormatter,
+                            density: config.listDensity,
+                            showTimestamp: config.showTimestamps,
+                            showPreview: config.showPreviews,
                             onSelect: { model.select(note.id) },
                             onDelete: { model.delete(note.id) })
                     }
@@ -554,7 +600,7 @@ struct NotebookView: View {
                 .frame(maxWidth: .infinity)
         }
         .padding(12)
-        .frame(width: 210)
+        .frame(width: config.sidebarWidth)
     }
 
     // MARK: Adaptive one-line toolbar
@@ -830,13 +876,16 @@ private struct NoteRow: View {
     let note: Note
     let selected: Bool
     let timeFormatter: DateFormatter
+    let density: NotebookListDensity
+    let showTimestamp: Bool
+    let showPreview: Bool
     let onSelect: () -> Void
     let onDelete: () -> Void
     @State private var hovering = false
 
     var body: some View {
         Button(action: onSelect) {
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: density == .compact ? 2 : 4) {
                 HStack {
                     Text(note.title.isEmpty ? "Untitled" : note.title)
                         .font(.system(size: 12, weight: .semibold))
@@ -852,13 +901,21 @@ private struct NoteRow: View {
                         .buttonStyle(.plain)
                     }
                 }
-                Text(timeFormatter.string(from: note.modified).uppercased())
-                    .font(.system(size: 9, weight: .medium, design: .monospaced))
-                    .kerning(0.8)
-                    .foregroundStyle(Color.dsFaint)
+                if showPreview, !preview.isEmpty {
+                    Text(preview)
+                        .font(.system(size: 10))
+                        .foregroundStyle(Color.dsMuted)
+                        .lineLimit(density == .compact ? 1 : 2)
+                }
+                if showTimestamp {
+                    Text(timeFormatter.string(from: note.modified).uppercased())
+                        .font(.system(size: 9, weight: .medium, design: .monospaced))
+                        .kerning(0.8)
+                        .foregroundStyle(Color.dsFaint)
+                }
             }
             .padding(.horizontal, 10)
-            .padding(.vertical, 7)
+            .padding(.vertical, density == .compact ? 5 : 8)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
                 selected ? Color.dsInk2 : (hovering ? Color.dsInk1 : Color.clear),
@@ -866,6 +923,13 @@ private struct NoteRow: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
+    }
+
+    private var preview: String {
+        note.plainText
+            .replacingOccurrences(of: "\n", with: " ")
+            .split(whereSeparator: \.isWhitespace)
+            .joined(separator: " ")
     }
 }
 
@@ -877,11 +941,16 @@ private struct NotebookSettingsPane: View {
     let onHotkeyChange: (HotkeyPreset) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HotkeyRecorderButton(label: "Toggle panel", preset: hotkey, onChange: onHotkeyChange)
+        VStack(alignment: .leading, spacing: 12) {
+            DSSettingsCard(title: "Shortcut") {
+                HotkeyRecorderButton(
+                    label: "Toggle panel", preset: hotkey, onChange: onHotkeyChange)
+            }
 
-            VStack(alignment: .leading, spacing: 8) {
-                DSSectionLabel("Font")
+            DSSettingsCard(title: "Editor") {
+                Text("Typeface")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.dsFaint)
                 HStack(spacing: 8) {
                     ForEach(NotebookFont.allCases, id: \.rawValue) { family in
                         DSChip(title: family.displayName, selected: config.fontFamily == family) {
@@ -889,18 +958,71 @@ private struct NotebookSettingsPane: View {
                         }
                     }
                 }
+                Text("Base text size")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.dsFaint)
+                HStack(spacing: 8) {
+                    ForEach([11.0, 13.0, 15.0, 17.0, 20.0], id: \.self) { size in
+                        DSChip(title: "\(Int(size))", selected: config.fontSize == size) {
+                            config.fontSize = size
+                        }
+                    }
+                }
+                DSToggleRow(
+                    title: "Check spelling while typing",
+                    isOn: $config.spellCheck)
+                DSToggleRow(
+                    title: "Use smart quotes",
+                    isOn: $config.smartQuotes)
             }
 
-            VStack(alignment: .leading, spacing: 10) {
-                DSSectionLabel("Panel")
+            DSSettingsCard(title: "Sidebar") {
                 DSToggleRow(
                     title: "Show sidebar",
                     caption: "Note list and search. Also toggleable from the toolbar.",
                     isOn: $config.sidebarVisible)
+                Text("Width")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.dsFaint)
+                HStack(spacing: 8) {
+                    ForEach([(180.0, "Narrow"), (210.0, "Standard"), (280.0, "Wide")], id: \.0) { width, title in
+                        DSChip(title: title, selected: config.sidebarWidth == width) {
+                            config.sidebarWidth = width
+                        }
+                    }
+                }
+                Text("Sort notes")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.dsFaint)
+                HStack(spacing: 8) {
+                    ForEach(NotebookSortOrder.allCases, id: \.rawValue) { order in
+                        DSChip(title: order.displayName, selected: config.sortOrder == order) {
+                            config.sortOrder = order
+                        }
+                    }
+                }
+                Text("List density")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.dsFaint)
+                HStack(spacing: 8) {
+                    ForEach(NotebookListDensity.allCases, id: \.rawValue) { density in
+                        DSChip(title: density.displayName, selected: config.listDensity == density) {
+                            config.listDensity = density
+                        }
+                    }
+                }
+                DSToggleRow(title: "Show note previews", isOn: $config.showPreviews)
+                DSToggleRow(title: "Show edited timestamps", isOn: $config.showTimestamps)
+            }
+
+            DSSettingsCard(title: "Window") {
                 DSToggleRow(
                     title: "Keep panel on top",
                     caption: "Float above other windows while open.",
                     isOn: $config.floatOnTop)
+                Text("Notebook remembers its last size and screen position.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.dsFaint)
             }
 
             Text("Notes save automatically to Application Support/FreeSpeech/notes.")
@@ -1204,6 +1326,8 @@ struct RichTextEditor: NSViewRepresentable {
         tv.insertionPointColor = DS.accent
         tv.textContainerInset = NSSize(width: 14, height: 12)
         tv.typingAttributes = model.config.bodyAttributes
+        tv.isContinuousSpellCheckingEnabled = model.config.spellCheck
+        tv.isAutomaticQuoteSubstitutionEnabled = model.config.smartQuotes
         tv.selectedTextAttributes = [.backgroundColor: DS.ink3]
         scroll.drawsBackground = true
         scroll.backgroundColor = DS.ink0
@@ -1217,6 +1341,16 @@ struct RichTextEditor: NSViewRepresentable {
         let coordinator = context.coordinator
         proxy.textView = coordinator.textView
         model.editorTextView = coordinator.textView
+        if let tv = coordinator.textView {
+            tv.isContinuousSpellCheckingEnabled = model.config.spellCheck
+            tv.isAutomaticQuoteSubstitutionEnabled = model.config.smartQuotes
+            if coordinator.fontSize != model.config.fontSize
+                || coordinator.fontFamily != model.config.fontFamily {
+                tv.typingAttributes = model.config.bodyAttributes
+                coordinator.fontSize = model.config.fontSize
+                coordinator.fontFamily = model.config.fontFamily
+            }
+        }
         guard coordinator.loadedGeneration != model.loadGeneration,
               let tv = coordinator.textView else { return }
         coordinator.loadedGeneration = model.loadGeneration
@@ -1233,6 +1367,8 @@ struct RichTextEditor: NSViewRepresentable {
         weak var textView: NSTextView?
         var loadedGeneration = -1
         var suppressChangeCallback = false
+        var fontSize: Double?
+        var fontFamily: NotebookFont?
 
         init(model: NotebookViewModel) {
             self.model = model

@@ -16,9 +16,15 @@ final class AutoclickModule: NSObject, AppModule, NSMenuDelegate {
     private var timer: DispatchSourceTimer?
     private var clicksPerformed = 0
     private var lastPostedPosition: CGPoint?
+    private var pendingStart = false
+    private var startGeneration = 0
     private let macroRunner = MacroRunner()
     private let paneModel = AutoclickPaneModel()
-    private lazy var settingsWindow = ModuleSettingsWindowController(info: info) { [weak self] in
+    private lazy var settingsWindow = ModuleSettingsWindowController(
+        info: info,
+        contentSize: NSSize(width: 640, height: 720),
+        minimumSize: NSSize(width: 560, height: 480)
+    ) { [weak self] in
         self?.makeSettingsPane() ?? AnyView(EmptyView())
     }
 
@@ -34,6 +40,10 @@ final class AutoclickModule: NSObject, AppModule, NSMenuDelegate {
         static let mode = "mode"    // simple | macro
         static let macro = "macro"  // working Macro JSON
         static let macroLibrary = "macroLibrary"  // [NamedMacro] JSON
+        static let triggerMode = "triggerMode"
+        static let startDelay = "startDelay"
+        static let maxDuration = "maxDuration"
+        static let statusStyle = "statusStyle"
     }
 
     enum Mode: String, CaseIterable {
@@ -45,6 +55,18 @@ final class AutoclickModule: NSObject, AppModule, NSMenuDelegate {
             case .macro: return "Macro"
             }
         }
+    }
+
+    enum TriggerMode: String, CaseIterable {
+        case toggle, hold
+
+        var displayName: String { rawValue.capitalized }
+    }
+
+    enum StatusStyle: String, CaseIterable {
+        case icon, counter
+
+        var displayName: String { rawValue.capitalized }
     }
 
     // Ctrl+Opt+T: "tap", mirrors Notebook's Ctrl+Opt namespace.
@@ -73,7 +95,9 @@ final class AutoclickModule: NSObject, AppModule, NSMenuDelegate {
                 .flatMap(AutoclickPlan.Target.init) ?? .cursor,
             clickType: settings.moduleString(id: id, key: Key.clickType)
                 .flatMap(AutoclickPlan.ClickType.init) ?? .single,
-            stopOnCursorMove: settings.moduleBool(id: id, key: Key.stopOnMove) ?? true)
+            stopOnCursorMove: settings.moduleBool(id: id, key: Key.stopOnMove) ?? true,
+            maxDuration: settings.moduleDouble(id: id, key: Key.maxDuration)
+                .flatMap { $0 > 0 ? $0 : nil })
     }
 
     private var fixedPoint: CGPoint {
@@ -82,7 +106,7 @@ final class AutoclickModule: NSObject, AppModule, NSMenuDelegate {
             y: settings.moduleDouble(id: info.id, key: Key.pointY) ?? 0)
     }
 
-    var isRunning: Bool { timer != nil || macroRunner.isRunning }
+    var isRunning: Bool { pendingStart || timer != nil || macroRunner.isRunning }
 
     var mode: Mode {
         settings.moduleString(id: info.id, key: Key.mode).flatMap(Mode.init) ?? .simple
@@ -100,8 +124,7 @@ final class AutoclickModule: NSObject, AppModule, NSMenuDelegate {
     func activate() {
         if hotkeyToken == nil {
             hotkeyToken = hub.register(preset: hotkey, label: "autoclick.toggle") { [weak self] direction in
-                guard direction == .down else { return }
-                self?.toggleClicking()
+                self?.handleHotkey(direction)
             }
         }
         paneModel.module = self
@@ -116,7 +139,7 @@ final class AutoclickModule: NSObject, AppModule, NSMenuDelegate {
     func setMenuBarItemVisible(_ visible: Bool) {
         if visible {
             if statusItem == nil {
-                let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+                let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
                 item.button?.toolTip = "Tap autoclicker"
                 let menu = NSMenu()
                 menu.delegate = self
@@ -139,19 +162,74 @@ final class AutoclickModule: NSObject, AppModule, NSMenuDelegate {
         return AnyView(AutoclickSettingsPane(model: paneModel, settings: settings))
     }
 
+    func refreshStatusPresentation() {
+        updateStatusIcon()
+    }
+
+    func updateHotkey(_ preset: HotkeyPreset) {
+        settings.setModuleHotkey(preset, id: info.id)
+        if let hotkeyToken { hub.update(hotkeyToken, preset: preset) }
+    }
+
     // MARK: - Clicking
+
+    private var triggerMode: TriggerMode {
+        settings.moduleString(id: info.id, key: Key.triggerMode)
+            .flatMap(TriggerMode.init) ?? .toggle
+    }
+
+    private var startDelay: TimeInterval {
+        max(0, settings.moduleDouble(id: info.id, key: Key.startDelay) ?? 0)
+    }
+
+    private var statusStyle: StatusStyle {
+        settings.moduleString(id: info.id, key: Key.statusStyle)
+            .flatMap(StatusStyle.init) ?? .icon
+    }
+
+    private func handleHotkey(_ direction: HotkeyRecognizer.Direction) {
+        switch (triggerMode, direction) {
+        case (.toggle, .down): toggleClicking()
+        case (.hold, .down):
+            if !isRunning { beginConfiguredRun() }
+        case (.hold, .up): stopClicking()
+        default: break
+        }
+    }
 
     func toggleClicking() {
         if isRunning {
             stopClicking()
             return
         }
+        beginConfiguredRun()
+    }
+
+    private func beginConfiguredRun() {
         // Synthetic events need Accessibility; usually granted already for the
         // shared tap, but the coach covers a fresh install.
         guard Permissions.accessibilityTrusted(promptIfNeeded: true) else {
             permissionCoach.show(.accessibility)
             return
         }
+        let delay = startDelay
+        guard delay > 0 else {
+            startSelectedMode()
+            return
+        }
+        pendingStart = true
+        startGeneration += 1
+        let generation = startGeneration
+        updateStatusIcon()
+        paneModel.objectWillChange.send()
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self, self.pendingStart, self.startGeneration == generation else { return }
+            self.pendingStart = false
+            self.startSelectedMode()
+        }
+    }
+
+    private func startSelectedMode() {
         switch mode {
         case .simple:
             startClicking()
@@ -159,6 +237,8 @@ final class AutoclickModule: NSObject, AppModule, NSMenuDelegate {
             let macro = storedMacro
             guard !macro.steps.isEmpty else {
                 Log.error("macro: start requested with no steps recorded")
+                updateStatusIcon()
+                paneModel.objectWillChange.send()
                 return
             }
             macroRunner.onStateChange = { [weak self] in
@@ -174,6 +254,7 @@ final class AutoclickModule: NSObject, AppModule, NSMenuDelegate {
         let plan = Self.currentPlan(settings: settings)
         clicksPerformed = 0
         lastPostedPosition = nil
+        let startedAt = CFAbsoluteTimeGetCurrent()
         Log.info("autoclick: start interval=\(plan.interval)s max=\(plan.maxClicks.map(String.init) ?? "unlimited") button=\(plan.button.rawValue) type=\(plan.clickType.rawValue) target=\(plan.target.rawValue)")
         let source = DispatchSource.makeTimerSource(queue: .main)
         source.schedule(deadline: .now(), repeating: plan.interval)
@@ -181,6 +262,11 @@ final class AutoclickModule: NSObject, AppModule, NSMenuDelegate {
             guard let self else { return }
             if plan.isComplete(afterClicks: self.clicksPerformed) {
                 Log.info("autoclick: reached \(self.clicksPerformed) clicks, stopping")
+                self.stopClicking()
+                return
+            }
+            if plan.isTimeLimitReached(elapsed: CFAbsoluteTimeGetCurrent() - startedAt) {
+                Log.info("autoclick: reached time limit, stopping")
                 self.stopClicking()
                 return
             }
@@ -196,6 +282,12 @@ final class AutoclickModule: NSObject, AppModule, NSMenuDelegate {
             }
             self.postClick(plan: plan)
             self.clicksPerformed += 1
+            if self.statusStyle == .counter {
+                let updateEvery = max(1, Int(0.25 / plan.interval))
+                if self.clicksPerformed.isMultiple(of: updateEvery) {
+                    self.updateStatusIcon()
+                }
+            }
         }
         timer = source
         source.resume()
@@ -204,6 +296,8 @@ final class AutoclickModule: NSObject, AppModule, NSMenuDelegate {
     }
 
     private func stopClicking() {
+        pendingStart = false
+        startGeneration += 1
         if macroRunner.isRunning {
             macroRunner.stop()
         }
@@ -262,10 +356,21 @@ final class AutoclickModule: NSObject, AppModule, NSMenuDelegate {
         guard let button = statusItem?.button else { return }
         button.image = NSImage(
             systemSymbolName: isRunning ? "cursorarrow.click.badge.clock" : "cursorarrow.click.2",
-            accessibilityDescription: isRunning ? "Tap clicking" : "Tap idle")
+            accessibilityDescription: pendingStart ? "Tap waiting to start" : (isRunning ? "Tap running" : "Tap idle"))
+        let statusText: String
+        if isRunning, statusStyle == .counter {
+            statusText = mode == .macro ? " \(macroRunner.runsCompleted + 1)" : " \(clicksPerformed)"
+        } else {
+            statusText = ""
+        }
+        button.attributedTitle = NSAttributedString(
+            string: statusText,
+            attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium)])
         // Accent tint = live activity, matching the suite's use of red for "hot".
         button.contentTintColor = isRunning ? DS.accent : nil
-        button.toolTip = isRunning ? "Tap: clicking (hotkey stops)" : "Tap autoclicker"
+        button.toolTip = pendingStart
+            ? "Tap: waiting to start"
+            : (isRunning ? "Tap: running (hotkey stops)" : "Tap autoclicker")
     }
 
     // MARK: - Menu
@@ -274,18 +379,22 @@ final class AutoclickModule: NSObject, AppModule, NSMenuDelegate {
         menu.removeAllItems()
         menu.autoenablesItems = false
         let statusTitle: String
-        switch (mode, isRunning) {
-        case (.simple, true):
-            statusTitle = "Clicking — \(clicksPerformed) so far"
-        case (.simple, false):
-            let plan = Self.currentPlan(settings: settings)
-            statusTitle = String(
-                format: "Idle — %.2fs interval, %@", plan.interval,
-                plan.maxClicks.map { "\($0) clicks" } ?? "until stopped")
-        case (.macro, true):
-            statusTitle = "Macro running — pass \(macroRunner.runsCompleted + 1)"
-        case (.macro, false):
-            statusTitle = "Macro — \(storedMacro.steps.count) steps"
+        if pendingStart {
+            statusTitle = "Waiting to start"
+        } else {
+            switch (mode, isRunning) {
+            case (.simple, true):
+                statusTitle = "Clicking — \(clicksPerformed) so far"
+            case (.simple, false):
+                let plan = Self.currentPlan(settings: settings)
+                statusTitle = String(
+                    format: "Idle — %.2fs interval, %@", plan.interval,
+                    plan.maxClicks.map { "\($0) clicks" } ?? "until stopped")
+            case (.macro, true):
+                statusTitle = "Macro running — pass \(macroRunner.runsCompleted + 1)"
+            case (.macro, false):
+                statusTitle = "Macro — \(storedMacro.steps.count) steps"
+            }
         }
         let status = NSMenuItem(title: statusTitle, action: nil, keyEquivalent: "")
         status.isEnabled = false
@@ -350,6 +459,7 @@ final class MacroRunner {
         guard isRunning, generation == self.generation else { return }
         if stepIndex >= macro.steps.count {
             runsCompleted += 1
+            onStateChange?()
             if macro.isComplete(afterRuns: runsCompleted) {
                 Log.info("macro: completed \(runsCompleted) passes")
                 isRunning = false
@@ -447,6 +557,10 @@ private struct AutoclickSettingsPane: View {
     @State private var target: AutoclickPlan.Target
     @State private var clickType: AutoclickPlan.ClickType
     @State private var stopOnMove: Bool
+    @State private var triggerMode: AutoclickModule.TriggerMode
+    @State private var startDelay: Double
+    @State private var maxDuration: Double
+    @State private var statusStyle: AutoclickModule.StatusStyle
 
     init(model: AutoclickPaneModel, settings: Settings) {
         self.model = model
@@ -463,6 +577,12 @@ private struct AutoclickSettingsPane: View {
         _clickType = State(initialValue: settings.moduleString(id: id, key: AutoclickModule.Key.clickType)
             .flatMap(AutoclickPlan.ClickType.init) ?? .single)
         _stopOnMove = State(initialValue: settings.moduleBool(id: id, key: AutoclickModule.Key.stopOnMove) ?? true)
+        _triggerMode = State(initialValue: settings.moduleString(id: id, key: AutoclickModule.Key.triggerMode)
+            .flatMap(AutoclickModule.TriggerMode.init) ?? .toggle)
+        _startDelay = State(initialValue: settings.moduleDouble(id: id, key: AutoclickModule.Key.startDelay) ?? 0)
+        _maxDuration = State(initialValue: settings.moduleDouble(id: id, key: AutoclickModule.Key.maxDuration) ?? 0)
+        _statusStyle = State(initialValue: settings.moduleString(id: id, key: AutoclickModule.Key.statusStyle)
+            .flatMap(AutoclickModule.StatusStyle.init) ?? .icon)
     }
 
     var body: some View {
@@ -486,12 +606,55 @@ private struct AutoclickSettingsPane: View {
                 .font(.system(size: 11))
                 .foregroundStyle(Color.dsFaint)
 
-            DSSettingsCard(title: "Hotkey") {
+            DSSettingsCard(title: "Current run") {
+                HStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(model.module?.isRunning == true ? "Running" : "Ready")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(model.module?.isRunning == true ? Color.dsAccent : Color.dsPaper)
+                        Text(runSummary)
+                            .font(.system(size: 11))
+                            .foregroundStyle(Color.dsFaint)
+                    }
+                    Spacer()
+                    Button(model.module?.isRunning == true ? "Stop" : "Start") {
+                        model.module?.toggleClicking()
+                    }
+                    .buttonStyle(GhostButtonStyle())
+                }
+            }
+
+            DSSettingsCard(title: "Control") {
                 HotkeyRecorderButton(
                     label: "Start / stop",
                     preset: settings.moduleHotkey(
                         id: moduleID, defaultPreset: AutoclickModule.defaultHotkey),
-                    onChange: { settings.setModuleHotkey($0, id: moduleID) })
+                    onChange: { model.module?.updateHotkey($0) })
+                optionRow("Trigger") {
+                    ForEach(AutoclickModule.TriggerMode.allCases, id: \.rawValue) { value in
+                        chip(value.displayName, selected: triggerMode == value) {
+                            triggerMode = value
+                            settings.setModuleString(value.rawValue, id: moduleID, key: AutoclickModule.Key.triggerMode)
+                        }
+                    }
+                }
+                optionRow("Start after") {
+                    ForEach([0.0, 1.0, 3.0, 5.0], id: \.self) { value in
+                        chip(value == 0 ? "Now" : "\(Int(value))s", selected: startDelay == value) {
+                            startDelay = value
+                            settings.setModuleDouble(value, id: moduleID, key: AutoclickModule.Key.startDelay)
+                        }
+                    }
+                }
+                optionRow("Menu bar") {
+                    ForEach(AutoclickModule.StatusStyle.allCases, id: \.rawValue) { value in
+                        chip(value.displayName, selected: statusStyle == value) {
+                            statusStyle = value
+                            settings.setModuleString(value.rawValue, id: moduleID, key: AutoclickModule.Key.statusStyle)
+                            model.module?.refreshStatusPresentation()
+                        }
+                    }
+                }
             }
 
             if mode == .macro {
@@ -525,6 +688,19 @@ private struct AutoclickSettingsPane: View {
                 Text("s")
                     .font(.system(size: 11))
                     .foregroundStyle(Color.dsFaint)
+                Spacer()
+            }
+            HStack(spacing: 8) {
+                Text("Time limit")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Color.dsMuted)
+                    .frame(width: 60, alignment: .leading)
+                ForEach([0.0, 30.0, 300.0, 900.0], id: \.self) { value in
+                    chip(timeLimitTitle(value), selected: maxDuration == value) {
+                        maxDuration = value
+                        settings.setModuleDouble(value, id: moduleID, key: AutoclickModule.Key.maxDuration)
+                    }
+                }
                 Spacer()
             }
             HStack(spacing: 8) {
@@ -614,6 +790,37 @@ private struct AutoclickSettingsPane: View {
     private func setMaxClicks(_ value: Double) {
         maxClicks = value.rounded()
         settings.setModuleInt(Int(maxClicks), id: moduleID, key: AutoclickModule.Key.maxClicks)
+    }
+
+    private var runSummary: String {
+        if mode == .macro {
+            let steps = model.module?.storedMacro.steps.count ?? 0
+            return "Macro · \(steps) step\(steps == 1 ? "" : "s") · \(triggerMode.displayName) trigger"
+        }
+        let limit = maxClicks == 0 ? "until stopped" : "\(Int(maxClicks)) clicks"
+        return "\(chipTitle(interval)) · \(limit) · \(triggerMode.displayName) trigger"
+    }
+
+    private func optionRow<Content: View>(
+        _ title: String, @ViewBuilder content: () -> Content
+    ) -> some View {
+        HStack(spacing: 8) {
+            Text(title)
+                .font(.system(size: 11))
+                .foregroundStyle(Color.dsFaint)
+                .frame(width: 72, alignment: .leading)
+            content()
+            Spacer()
+        }
+    }
+
+    private func timeLimitTitle(_ value: Double) -> String {
+        switch value {
+        case 0: return "Never"
+        case 30: return "30s"
+        case 300: return "5m"
+        default: return "15m"
+        }
     }
 
     private var captureButtonTitle: String {
@@ -732,6 +939,15 @@ private struct MacroEditorSection: View {
                 Text("Clicks use the Click settings from Autoclick mode as they are added.")
                     .font(.system(size: 11))
                     .foregroundStyle(Color.dsFaint)
+                if !macro.steps.isEmpty {
+                    Button("Clear all steps") {
+                        macro.steps.removeAll()
+                        persist()
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Color.dsAccent)
+                }
             }
 
             DSSettingsCard(title: "Repeat") {
@@ -763,6 +979,23 @@ private struct MacroEditorSection: View {
                         fractionDigits: 2,
                         onCommit: { _ in persist() })
                     Text("between runs")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Color.dsFaint)
+                    Spacer()
+                }
+                HStack(spacing: 8) {
+                    Text("Step gap")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Color.dsMuted)
+                    DSNumberField(
+                        placeholder: "sec",
+                        value: Binding(
+                            get: { macro.stepGap },
+                            set: { macro.stepGap = $0 }),
+                        range: 0...60,
+                        fractionDigits: 2,
+                        onCommit: { _ in persist() })
+                    Text("between actions")
                         .font(.system(size: 11))
                         .foregroundStyle(Color.dsFaint)
                     Spacer()
@@ -959,9 +1192,12 @@ private struct MacroEditorSection: View {
             return
         }
         recordingKey = true
-        keyCapture.begin { preset in
-            recordingKey = false
-            append(.key(keyCode: preset.keyCode, modifiers: preset.modifiers.rawValue))
-        }
+        keyCapture.begin(
+            onSet: { preset in
+                recordingKey = false
+                append(.key(keyCode: preset.keyCode, modifiers: preset.modifiers.rawValue))
+            },
+            onClear: { recordingKey = false },
+            onCancel: { recordingKey = false })
     }
 }

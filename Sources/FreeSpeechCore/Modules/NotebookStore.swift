@@ -1,5 +1,17 @@
 import Foundation
 
+public enum NotebookSortOrder: String, CaseIterable, Codable {
+    case modified
+    case title
+
+    public var displayName: String {
+        switch self {
+        case .modified: return "Recently edited"
+        case .title: return "Title"
+        }
+    }
+}
+
 // One note. `rich` is an opaque RTF blob produced by the app layer (RTF because
 // it round-trips bold, color, and NSTextList bullets, and stays a documented
 // format on disk); `plainText` is kept alongside it so search never has to
@@ -46,17 +58,30 @@ public final class NotebookStore {
 
     public var count: Int { queue.sync { cache.count } }
 
-    // Newest modified first.
-    public func notes() -> [Note] {
-        queue.sync { cache.values.sorted { $0.modified > $1.modified } }
+    public func notes(sortedBy order: NotebookSortOrder = .modified) -> [Note] {
+        queue.sync {
+            switch order {
+            case .modified:
+                return cache.values.sorted { $0.modified > $1.modified }
+            case .title:
+                return cache.values.sorted {
+                    let lhs = $0.title.isEmpty ? "Untitled" : $0.title
+                    let rhs = $1.title.isEmpty ? "Untitled" : $1.title
+                    let comparison = lhs.localizedCaseInsensitiveCompare(rhs)
+                    return comparison == .orderedSame
+                        ? $0.modified > $1.modified
+                        : comparison == .orderedAscending
+                }
+            }
+        }
     }
 
     public func note(id: UUID) -> Note? {
         queue.sync { cache[id] }
     }
 
-    public func search(_ query: String) -> [Note] {
-        let all = notes()
+    public func search(_ query: String, sortedBy order: NotebookSortOrder = .modified) -> [Note] {
+        let all = notes(sortedBy: order)
         guard !query.trimmingCharacters(in: .whitespaces).isEmpty else { return all }
         return all.filter {
             $0.title.localizedCaseInsensitiveContains(query)

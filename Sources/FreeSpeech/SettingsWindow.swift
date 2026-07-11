@@ -21,8 +21,7 @@ final class SettingsStore: ObservableObject {
     private let learningStore: LearningStore
     private let onHotkeyChanged: () -> Void
     private let onModelChanged: () -> Void
-    private var captureMonitor: Any?
-    private var involvedModifiers: Set<Int64> = []
+    private let shortcutCapture = ShortcutCapture()
 
     @Published var mode: ActivationMode { didSet { settings.mode = mode } }
     @Published var hotkey: HotkeyPreset {
@@ -260,63 +259,30 @@ final class SettingsStore: ObservableObject {
     // Captures the next chord as the hotkey: a plain key, a combo like Cmd+K or
     // Cmd+Opt+Space, or a bare modifier (press and release it alone). Esc cancels.
     func beginShortcutCapture(for target: ShortcutTarget) {
-        guard captureMonitor == nil else { return }
+        guard !shortcutCapture.isCapturing else { return }
         capturingTarget = target
-        involvedModifiers = []
         Log.info("shortcut capture started")
-        captureMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { [weak self] event in
-            guard let self else { return event }
-            let code = Int64(event.keyCode)
-            switch event.type {
-            case .keyDown:
-                if code == 53 {  // Esc cancels without saving
-                    self.endShortcutCapture()
-                    return nil
-                }
-                // fn is excluded from combos: it rides along on F-keys and arrows.
-                let flags = event.modifierFlags.intersection([.command, .option, .shift, .control])
-                var mods: HotkeyModifiers = []
-                if flags.contains(.command) { mods.insert(.command) }
-                if flags.contains(.option) { mods.insert(.option) }
-                if flags.contains(.shift) { mods.insert(.shift) }
-                if flags.contains(.control) { mods.insert(.control) }
-                self.capture(code, modifiers: mods)
-                return nil
-            case .flagsChanged:
-                guard KeyNames.isModifier(code) else { return event }
-                let anyHeld = !event.modifierFlags
-                    .intersection([.command, .option, .shift, .control, .function]).isEmpty
-                if anyHeld {
-                    self.involvedModifiers.insert(code)
-                } else {
-                    // Everything released without a regular key: a single involved
-                    // modifier means the user chose that modifier as the hotkey.
-                    if self.involvedModifiers.count == 1, let only = self.involvedModifiers.first {
-                        self.capture(only, modifiers: [])
-                    }
-                    self.involvedModifiers = []
-                }
-                return event
-            default:
-                return event
+        shortcutCapture.begin(
+            onSet: { [weak self] preset in
+                self?.capture(preset, for: target)
+            },
+            onClear: { [weak self] in
+                self?.capture(.disabled, for: target)
+            },
+            onCancel: { [weak self] in
+                self?.capturingTarget = nil
             }
-        }
+        )
     }
 
     func endShortcutCapture() {
-        if let captureMonitor {
-            NSEvent.removeMonitor(captureMonitor)
-        }
-        captureMonitor = nil
+        shortcutCapture.end()
         capturingTarget = nil
-        involvedModifiers = []
     }
 
-    private func capture(_ keyCode: Int64, modifiers: HotkeyModifiers) {
-        let target = capturingTarget
-        endShortcutCapture()
-        let preset = HotkeyPreset.custom(keyCode: keyCode, modifiers: modifiers)
-        Log.info("shortcut captured for \(target == .systemAudio ? "system audio" : "mic"): \(preset.displayName) [keyCode \(keyCode), modifiers \(modifiers.rawValue)]")
+    private func capture(_ preset: HotkeyPreset, for target: ShortcutTarget) {
+        capturingTarget = nil
+        Log.info("shortcut captured for \(target == .systemAudio ? "system audio" : "mic"): \(preset.displayName) [keyCode \(preset.keyCode), modifiers \(preset.modifiers.rawValue)]")
         if target == .systemAudio {
             systemHotkey = preset
         } else {
@@ -330,6 +296,7 @@ struct SettingsView: View {
     @ObservedObject var store: SettingsStore
     // Observed directly: the store does not republish the manager's changes.
     @ObservedObject var updates: UpdateManager
+    @ObservedObject private var appearance = AppearanceManager.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -366,7 +333,7 @@ struct SettingsView: View {
         .frame(
             minWidth: 520, idealWidth: 560, maxWidth: .infinity,
             minHeight: 560, idealHeight: 680, maxHeight: .infinity)
-        .background(Color.dsInk0)
+        .background(AppearanceBackground())
         .onAppear { store.refresh() }
         .onDisappear { store.endShortcutCapture() }
     }

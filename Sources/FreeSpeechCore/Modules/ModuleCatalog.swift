@@ -66,7 +66,7 @@ public enum ModuleCatalog {
     public static let appCleaner = ModuleInfo(
         id: "appcleaner", displayName: "AppCleaner",
         summary: "Uninstall apps together with their leftover support files.",
-        symbolName: "trash", status: .comingSoon, ownsMenuBarItem: true)
+        symbolName: "trash", status: .available, ownsMenuBarItem: true)
 
     public static let linearMouse = ModuleInfo(
         id: "linearmouse", displayName: "LinearMouse",
@@ -125,6 +125,7 @@ extension Settings {
             return defaultPreset
         }
         let keyCode = (defaultsValue(forKey: moduleKey(id, "hotkeyKeyCode")) as? Int).map(Int64.init) ?? 0
+        if keyCode == HotkeyPreset.disabled.keyCode { return .disabled }
         let modifiers = HotkeyModifiers(
             rawValue: UInt64((defaultsValue(forKey: moduleKey(id, "hotkeyModifiers")) as? Int) ?? 0))
         return .custom(keyCode: keyCode, modifiers: modifiers)

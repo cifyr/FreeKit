@@ -39,6 +39,7 @@ final class HistoryViewModel: ObservableObject {
 // Local transcript history: searchable, copy or re-insert. Greenlight styling.
 struct HistoryView: View {
     @ObservedObject var model: HistoryViewModel
+    @ObservedObject private var appearance = AppearanceManager.shared
 
     private static let timeFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -109,7 +110,7 @@ struct HistoryView: View {
         }
         .padding(20)
         .frame(width: 520, height: 560)
-        .background(Color.dsInk0)
+        .background(AppearanceBackground())
         .onAppear { model.refresh() }
     }
 

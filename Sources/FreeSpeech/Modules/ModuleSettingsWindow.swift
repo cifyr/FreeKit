@@ -28,6 +28,8 @@ final class ModuleSettingsWindowController {
             w.backgroundColor = DS.ink0
             w.minSize = NSSize(width: 460, height: 320)
             w.setContentSize(NSSize(width: 500, height: 520))
+            // Hidden titlebar leaves nothing to grab; drag anywhere instead.
+            w.isMovableByWindowBackground = true
             w.isReleasedWhenClosed = false
             w.center()
             window = w

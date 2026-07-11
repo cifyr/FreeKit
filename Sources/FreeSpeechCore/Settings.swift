@@ -13,8 +13,16 @@ public struct HotkeyModifiers: OptionSet, Equatable {
 
     public static let all: HotkeyModifiers = [.shift, .control, .option, .command, .fn]
 
+    public static let hyper: HotkeyModifiers = [.control, .option, .shift, .command]
+
     // Apple's canonical display order: Control, Option, Shift, Command.
+    // All four together collapse to the community hyper-key glyph — that combo
+    // only ever comes from a hyper-style remap, and four stacked symbols read
+    // as noise next to one key name.
     public var symbols: String {
+        if contains(Self.hyper) {
+            return contains(.fn) ? "\u{2726}fn" : "\u{2726}"
+        }
         var s = ""
         if contains(.control) { s += "\u{2303}" }
         if contains(.option) { s += "\u{2325}" }

@@ -5,10 +5,10 @@ import FreeSpeechCore
 // Caps Lock remap. Two layers: hidutil remaps Caps Lock -> F18 at the HID level
 // (a session event tap cannot observe caps press/release — the toggle happens
 // below it, and this also keeps the caps LED off), then the shared event tap
-// turns F18 into the chosen behavior via HyperKeyMapper. The hidutil mapping is
-// session-scoped: it clears on deactivate/quit and does not survive reboot, so
-// activate() reapplies it. If the app crashes while enabled, Caps Lock acts as
-// F18 until relaunch or reboot.
+// turns F18 into the configured behavior via HyperKeyMapper. The hidutil
+// mapping is session-scoped: it clears on deactivate/quit and does not survive
+// reboot, so activate() reapplies it. If the app crashes while enabled, Caps
+// Lock acts as F18 until relaunch or reboot.
 final class CapsLockModule: AppModule, EventRewriter {
     let info = ModuleCatalog.capsLock
 
@@ -16,7 +16,11 @@ final class CapsLockModule: AppModule, EventRewriter {
     private let hub: EventTapHub
     private let mapper: HyperKeyMapper
 
-    private static let behaviorKey = "behavior"
+    private enum Key {
+        static let holdFlags = "holdFlags"
+        static let tapEscape = "tapEscape"
+        static let legacyBehavior = "behavior"
+    }
     // kVK_F18. Assumes no physical F18 key; real ones are vanishingly rare.
     private static let triggerKeyCode: Int64 = 79
     private static let capsLockUsage: UInt64 = 0x7_0000_0039
@@ -25,9 +29,34 @@ final class CapsLockModule: AppModule, EventRewriter {
     init(settings: Settings, hub: EventTapHub) {
         self.settings = settings
         self.hub = hub
-        let behavior = settings.moduleString(id: ModuleCatalog.capsLock.id, key: Self.behaviorKey)
-            .flatMap(HyperKeyMapper.Behavior.init) ?? .hyper
-        mapper = HyperKeyMapper(behavior: behavior)
+        mapper = HyperKeyMapper(config: Self.loadConfig(settings: settings))
+    }
+
+    // Reads the composable config, migrating the first release's single
+    // "behavior" string if that is all that exists.
+    private static func loadConfig(settings: Settings) -> HyperKeyMapper.Config {
+        let id = ModuleCatalog.capsLock.id
+        if let flags = settings.moduleInt(id: id, key: Key.holdFlags) {
+            return HyperKeyMapper.Config(
+                holdFlags: UInt64(flags),
+                tapEmitsEscape: settings.moduleBool(id: id, key: Key.tapEscape) ?? false)
+        }
+        switch settings.moduleString(id: id, key: Key.legacyBehavior) {
+        case "command":
+            return .command
+        case "escapeTapHyperHold":
+            return HyperKeyMapper.Config(
+                holdFlags: HyperKeyMapper.hyperFlags, tapEmitsEscape: true)
+        default:
+            return .hyper
+        }
+    }
+
+    private func saveConfig(_ config: HyperKeyMapper.Config) {
+        settings.setModuleInt(Int(config.holdFlags), id: info.id, key: Key.holdFlags)
+        settings.setModuleBool(config.tapEmitsEscape, id: info.id, key: Key.tapEscape)
+        mapper.reset(config: config)
+        Log.info("capslock: holdFlags=\(HotkeyModifiers(rawValue: config.holdFlags).symbols.isEmpty ? "none" : HotkeyModifiers(rawValue: config.holdFlags).symbols) tapEscape=\(config.tapEmitsEscape)")
     }
 
     func activate() {
@@ -42,20 +71,14 @@ final class CapsLockModule: AppModule, EventRewriter {
 
     func setMenuBarItemVisible(_ visible: Bool) {}
 
-    // A single chip row: stays inline in the control-center card instead of
-    // opening a whole window.
+    // A handful of checkboxes: stays inline in the control-center card instead
+    // of opening a whole window.
     var settingsStyle: ModuleSettingsStyle { .inline }
 
     func makeSettingsPane() -> AnyView {
         AnyView(CapsLockSettingsPane(
-            current: mapper.behavior,
-            onSelect: { [weak self] behavior in
-                guard let self else { return }
-                self.settings.setModuleString(
-                    behavior.rawValue, id: self.info.id, key: Self.behaviorKey)
-                self.mapper.reset(behavior: behavior)
-                Log.info("capslock: behavior=\(behavior.rawValue)")
-            }))
+            initial: mapper.config,
+            onChange: { [weak self] config in self?.saveConfig(config) }))
     }
 
     // MARK: - EventRewriter
@@ -127,28 +150,77 @@ final class CapsLockModule: AppModule, EventRewriter {
     }
 }
 
+// Compose any modifier mix for the hold behavior; presets are shortcuts that
+// set the same checkboxes.
 private struct CapsLockSettingsPane: View {
-    @State var current: HyperKeyMapper.Behavior
-    let onSelect: (HyperKeyMapper.Behavior) -> Void
+    @State private var holdFlags: UInt64
+    @State private var tapEscape: Bool
+    let onChange: (HyperKeyMapper.Config) -> Void
+
+    init(initial: HyperKeyMapper.Config, onChange: @escaping (HyperKeyMapper.Config) -> Void) {
+        _holdFlags = State(initialValue: initial.holdFlags)
+        _tapEscape = State(initialValue: initial.tapEmitsEscape)
+        self.onChange = onChange
+    }
+
+    private var modifiers: HotkeyModifiers { HotkeyModifiers(rawValue: holdFlags) }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("BEHAVIOR")
-                .font(.system(size: 10, weight: .medium, design: .monospaced))
-                .kerning(1.2)
-                .foregroundStyle(Color.dsMuted)
+        VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
-                ForEach(HyperKeyMapper.Behavior.allCases, id: \.rawValue) { behavior in
-                    DSChip(title: behavior.displayName, selected: current == behavior) {
-                        current = behavior
-                        onSelect(behavior)
-                    }
+                DSSectionLabel("Hold acts as")
+                Text(modifiers.symbols.isEmpty ? "nothing" : modifiers.symbols)
+                    .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(modifiers.symbols.isEmpty ? Color.dsFaint : Color.dsAccent)
+            }
+            HStack(spacing: 8) {
+                DSChip(title: "\u{2726} Hyper", selected: modifiers == .hyper) {
+                    setFlags(HotkeyModifiers.hyper)
+                }
+                DSChip(title: "\u{2318} Command", selected: modifiers == [.command]) {
+                    setFlags([.command])
                 }
             }
-            Text("Hyper is Cmd+Opt+Ctrl+Shift — a modifier layer no app uses by default, free for your own shortcuts. Remap is applied while this module is on and removed when it is off or the app quits.")
+            HStack(spacing: 14) {
+                modifierCheckbox("\u{2318} Command", .command)
+                modifierCheckbox("\u{2325} Option", .option)
+                modifierCheckbox("\u{2303} Control", .control)
+                modifierCheckbox("\u{21E7} Shift", .shift)
+            }
+            DSToggleRow(
+                title: "Tap alone sends Escape",
+                caption: "A quick press with no other key acts as the Escape key.",
+                isOn: Binding(
+                    get: { tapEscape },
+                    set: { tapEscape = $0; commit() }))
+            Text("The \u{2726} hyper layer (all four modifiers) is free real estate: no app ships shortcuts on it, so it is yours for global hotkeys. Applied while this module is on; removed when off or the app quits.")
                 .font(.system(size: 11))
                 .foregroundStyle(Color.dsFaint)
                 .fixedSize(horizontal: false, vertical: true)
         }
+    }
+
+    private func modifierCheckbox(_ label: String, _ modifier: HotkeyModifiers) -> some View {
+        HStack(spacing: 6) {
+            DSCheckbox(isOn: Binding(
+                get: { modifiers.contains(modifier) },
+                set: { on in
+                    var m = modifiers
+                    if on { m.insert(modifier) } else { m.remove(modifier) }
+                    setFlags(m)
+                }))
+            Text(label)
+                .font(.system(size: 12))
+                .foregroundStyle(Color.dsPaper)
+        }
+    }
+
+    private func setFlags(_ m: HotkeyModifiers) {
+        holdFlags = m.rawValue
+        commit()
+    }
+
+    private func commit() {
+        onChange(HyperKeyMapper.Config(holdFlags: holdFlags, tapEmitsEscape: tapEscape))
     }
 }

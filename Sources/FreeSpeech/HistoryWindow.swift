@@ -208,6 +208,7 @@ final class HistoryWindowController {
             w.titleVisibility = .hidden
             w.appearance = NSAppearance(named: .darkAqua)
             w.backgroundColor = DS.ink0
+            w.isMovableByWindowBackground = true
             w.isReleasedWhenClosed = false
             w.center()
             window = w

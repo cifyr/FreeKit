@@ -1,4 +1,5 @@
 import AppKit
+import ServiceManagement
 import SwiftUI
 import FreeSpeechCore
 
@@ -59,6 +60,8 @@ final class ControlCenterWindowController {
             w.backgroundColor = DS.ink0
             w.minSize = NSSize(width: 560, height: 480)
             w.setContentSize(NSSize(width: 600, height: 720))
+            // Hidden titlebar leaves nothing to grab; drag anywhere instead.
+            w.isMovableByWindowBackground = true
             w.isReleasedWhenClosed = false
             w.center()
             window = w
@@ -105,11 +108,51 @@ struct ControlCenterView: View {
                 }
                 .padding(.bottom, 12)
             }
+            SuitePrefsFooter()
         }
         .padding(20)
         .frame(minWidth: 560, idealWidth: 600, maxWidth: .infinity,
                minHeight: 480, idealHeight: 720, maxHeight: .infinity)
         .background(Color.dsInk0)
+    }
+}
+
+// Suite-level preferences that belong to no single tool.
+private struct SuitePrefsFooter: View {
+    @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
+
+    var body: some View {
+        HStack(spacing: 10) {
+            DSCheckbox(isOn: Binding(
+                get: { launchAtLogin },
+                set: { setLaunchAtLogin($0) }))
+            Text("Launch at login")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Color.dsPaper)
+            Spacer()
+            Text("V0 \u{00B7} LOCAL ONLY")
+                .font(.system(size: 9, weight: .medium, design: .monospaced))
+                .kerning(1.0)
+                .foregroundStyle(Color.dsFaint)
+        }
+        .padding(.top, 4)
+    }
+
+    private func setLaunchAtLogin(_ enabled: Bool) {
+        do {
+            // Registers the running bundle; only sticks for the /Applications
+            // install, which is where build.sh puts every build.
+            if enabled {
+                try SMAppService.mainApp.register()
+            } else {
+                try SMAppService.mainApp.unregister()
+            }
+            launchAtLogin = enabled
+            Log.info("launch at login \(enabled ? "enabled" : "disabled")")
+        } catch {
+            Log.error("launch at login change failed: \(error.localizedDescription)")
+            launchAtLogin = SMAppService.mainApp.status == .enabled
+        }
     }
 }
 

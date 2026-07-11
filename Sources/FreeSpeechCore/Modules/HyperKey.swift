@@ -5,20 +5,21 @@ import Foundation
 // press/release: the toggle happens below the tap. F18 then behaves like a real
 // key with clean down/up events, and this mapper decides what each event becomes.
 public final class HyperKeyMapper {
-    public enum Behavior: String, CaseIterable {
-        // Caps Lock held = Cmd+Opt+Ctrl+Shift, a modifier no app ships defaults for.
-        case hyper
-        case command
-        // Tap alone = Escape, hold with another key = hyper.
-        case escapeTapHyperHold
+    // Fully user-composable: any modifier mix while held, optional Escape on a
+    // lone tap. Hyper and Command are just preset flag values.
+    public struct Config: Equatable {
+        public var holdFlags: UInt64
+        public var tapEmitsEscape: Bool
 
-        public var displayName: String {
-            switch self {
-            case .hyper: return "Hyper key"
-            case .command: return "Command"
-            case .escapeTapHyperHold: return "Tap Escape / hold Hyper"
-            }
+        public init(holdFlags: UInt64, tapEmitsEscape: Bool) {
+            self.holdFlags = holdFlags
+            self.tapEmitsEscape = tapEmitsEscape
         }
+
+        public static let hyper = Config(
+            holdFlags: HyperKeyMapper.hyperFlags, tapEmitsEscape: false)
+        public static let command = Config(
+            holdFlags: HotkeyModifiers.command.rawValue, tapEmitsEscape: false)
     }
 
     public enum KeyAction: Equatable {
@@ -28,34 +29,26 @@ public final class HyperKeyMapper {
         case swallowAndEmitEscape
     }
 
-    public static let hyperFlags: UInt64 =
-        HotkeyModifiers.command.rawValue | HotkeyModifiers.option.rawValue
-        | HotkeyModifiers.control.rawValue | HotkeyModifiers.shift.rawValue
+    // Cmd+Opt+Ctrl+Shift: a modifier layer no app ships defaults for.
+    public static let hyperFlags: UInt64 = HotkeyModifiers.hyper.rawValue
 
     // Slow enough for a deliberate tap, fast enough that holding for a chord
     // never fires a stray Escape.
     public static let tapTimeout: TimeInterval = 0.4
 
-    public private(set) var behavior: Behavior
+    public private(set) var config: Config
     public private(set) var triggerIsDown = false
     private var downTime: TimeInterval = 0
     private var chordedWhileDown = false
 
-    public init(behavior: Behavior) {
-        self.behavior = behavior
+    public init(config: Config) {
+        self.config = config
     }
 
-    public func reset(behavior: Behavior) {
-        self.behavior = behavior
+    public func reset(config: Config) {
+        self.config = config
         triggerIsDown = false
         chordedWhileDown = false
-    }
-
-    private var activeFlags: UInt64 {
-        switch behavior {
-        case .hyper, .escapeTapHyperHold: return Self.hyperFlags
-        case .command: return HotkeyModifiers.command.rawValue
-        }
     }
 
     public func handleTriggerDown(at time: TimeInterval) -> KeyAction {
@@ -69,18 +62,17 @@ public final class HyperKeyMapper {
 
     public func handleTriggerUp(at time: TimeInterval) -> KeyAction {
         triggerIsDown = false
-        if behavior == .escapeTapHyperHold, !chordedWhileDown,
-           time - downTime < Self.tapTimeout {
+        if config.tapEmitsEscape, !chordedWhileDown, time - downTime < Self.tapTimeout {
             return .swallowAndEmitEscape
         }
         return .swallow
     }
 
-    // Every non-trigger key event while the trigger is held gets the mapped
+    // Every non-trigger key event while the trigger is held gets the configured
     // modifier flags added, so apps see e.g. Hyper+K as one chord.
     public func handleOtherKey(flags: UInt64) -> KeyAction {
         guard triggerIsDown else { return .pass }
         chordedWhileDown = true
-        return .rewriteFlags(flags | activeFlags)
+        return .rewriteFlags(flags | config.holdFlags)
     }
 }

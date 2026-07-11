@@ -155,6 +155,18 @@ final class NotebookModule: NSObject, AppModule, NSMenuDelegate {
 
 // MARK: - Config
 
+enum NotebookFont: String, CaseIterable {
+    case system, serif, mono
+
+    var displayName: String {
+        switch self {
+        case .system: return "System"
+        case .serif: return "Serif"
+        case .mono: return "Mono"
+        }
+    }
+}
+
 // Settings-backed knobs the panel reacts to live.
 final class NotebookConfig: ObservableObject {
     private let settings: Settings
@@ -162,6 +174,9 @@ final class NotebookConfig: ObservableObject {
 
     @Published var fontSize: Double {
         didSet { settings.setModuleDouble(fontSize, id: id, key: "fontSize") }
+    }
+    @Published var fontFamily: NotebookFont {
+        didSet { settings.setModuleString(fontFamily.rawValue, id: id, key: "fontFamily") }
     }
     @Published var sidebarVisible: Bool {
         didSet { settings.setModuleBool(sidebarVisible, id: id, key: "sidebarVisible") }
@@ -173,13 +188,39 @@ final class NotebookConfig: ObservableObject {
     init(settings: Settings) {
         self.settings = settings
         fontSize = settings.moduleDouble(id: id, key: "fontSize") ?? 13
+        fontFamily = settings.moduleString(id: id, key: "fontFamily")
+            .flatMap(NotebookFont.init) ?? .system
         sidebarVisible = settings.moduleBool(id: id, key: "sidebarVisible") ?? true
         floatOnTop = settings.moduleBool(id: id, key: "floatOnTop") ?? true
     }
 
+    func font(size: Double, weight: NSFont.Weight = .regular) -> NSFont {
+        switch fontFamily {
+        case .system:
+            return .systemFont(ofSize: size, weight: weight)
+        case .serif:
+            let base = NSFont.systemFont(ofSize: size, weight: weight)
+            if let descriptor = base.fontDescriptor.withDesign(.serif),
+               let serif = NSFont(descriptor: descriptor, size: size) {
+                return serif
+            }
+            return base
+        case .mono:
+            return .monospacedSystemFont(ofSize: size, weight: weight)
+        }
+    }
+
+    func font(for level: RichTextEditorProxy.HeadingLevel) -> NSFont {
+        switch level {
+        case .title: return font(size: fontSize + 8, weight: .bold)
+        case .heading: return font(size: fontSize + 3, weight: .semibold)
+        case .body: return font(size: fontSize)
+        }
+    }
+
     var bodyAttributes: [NSAttributedString.Key: Any] {
         [
-            .font: NSFont.systemFont(ofSize: fontSize),
+            .font: font(size: fontSize),
             .foregroundColor: DS.paper,
         ]
     }
@@ -256,6 +297,7 @@ final class NotebookPanelController {
         p.backgroundColor = DS.ink0
         p.level = config.floatOnTop ? .floating : .normal
         p.hidesOnDeactivate = false
+        p.isMovableByWindowBackground = true
         p.isReleasedWhenClosed = false
         p.minSize = NSSize(width: 480, height: 340)
         p.setContentSize(NSSize(width: 680, height: 440))
@@ -454,19 +496,19 @@ struct NotebookView: View {
             }
             Rectangle().fill(Color.dsLine).frame(width: 1, height: 16)
             formatButton("textformat.size.larger", help: "Title") {
-                editor.applyHeading(.title, baseSize: config.fontSize)
+                editor.applyHeading(font: config.font(for: .title))
             }
             formatButton("textformat.size", help: "Heading") {
-                editor.applyHeading(.heading, baseSize: config.fontSize)
+                editor.applyHeading(font: config.font(for: .heading))
             }
             formatButton("textformat", help: "Body text") {
-                editor.applyHeading(.body, baseSize: config.fontSize)
+                editor.applyHeading(font: config.font(for: .body))
             }
             Rectangle().fill(Color.dsLine).frame(width: 1, height: 16)
             formatButton("bold", help: "Bold") { editor.toggleBold() }
             formatButton("list.bullet", help: "Bullet list") { editor.toggleBullets() }
             formatButton("rectangle.split.1x2", help: "Page split") {
-                editor.insertDivider(baseSize: config.fontSize)
+                editor.insertDivider(bodyFont: config.font(for: .body))
             }
             Rectangle().fill(Color.dsLine).frame(width: 1, height: 16)
             colorSwatch(DS.paper, name: "Paper")
@@ -566,6 +608,17 @@ private struct NotebookSettingsPane: View {
             HotkeyRecorderButton(label: "Toggle panel", preset: hotkey, onChange: onHotkeyChange)
 
             VStack(alignment: .leading, spacing: 8) {
+                DSSectionLabel("Font")
+                HStack(spacing: 8) {
+                    ForEach(NotebookFont.allCases, id: \.rawValue) { family in
+                        DSChip(title: family.displayName, selected: config.fontFamily == family) {
+                            config.fontFamily = family
+                        }
+                    }
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
                 DSSectionLabel("Text size")
                 HStack(spacing: 8) {
                     ForEach([11.0, 13.0, 15.0, 17.0], id: \.self) { size in
@@ -613,14 +666,6 @@ final class RichTextEditorProxy: ObservableObject {
 
     enum HeadingLevel {
         case title, heading, body
-
-        func font(baseSize: Double) -> NSFont {
-            switch self {
-            case .title: return NSFont.systemFont(ofSize: baseSize + 8, weight: .bold)
-            case .heading: return NSFont.systemFont(ofSize: baseSize + 3, weight: .semibold)
-            case .body: return NSFont.systemFont(ofSize: baseSize)
-            }
-        }
     }
 
     func toggleBold() {
@@ -656,11 +701,10 @@ final class RichTextEditorProxy: ObservableObject {
     }
 
     // Titles/headings apply per paragraph: partial-line headings read as noise.
-    func applyHeading(_ level: HeadingLevel, baseSize: Double) {
+    func applyHeading(font: NSFont) {
         guard let tv = textView, let storage = tv.textStorage else { return }
         let text = storage.string as NSString
         let range = text.paragraphRange(for: tv.selectedRange())
-        let font = level.font(baseSize: baseSize)
         if range.length > 0 {
             storage.beginEditing()
             storage.addAttribute(.font, value: font, range: range)
@@ -686,7 +730,7 @@ final class RichTextEditorProxy: ObservableObject {
 
     // Page split: a faint full-line rule as literal text, so it survives the
     // RTF round-trip without RTFD attachments.
-    func insertDivider(baseSize: Double) {
+    func insertDivider(bodyFont: NSFont) {
         guard let tv = textView, let storage = tv.textStorage else { return }
         let insertAt = tv.selectedRange().location
         let text = storage.string as NSString
@@ -695,14 +739,14 @@ final class RichTextEditorProxy: ObservableObject {
         let divider = NSMutableAttributedString(
             string: (atLineStart ? "" : "\n") + rule + "\n",
             attributes: [
-                .font: NSFont.systemFont(ofSize: baseSize),
+                .font: bodyFont,
                 .foregroundColor: DS.faint,
             ])
         storage.insert(divider, at: insertAt)
         tv.setSelectedRange(NSRange(location: insertAt + divider.length, length: 0))
         // Typing after a split starts fresh body text, not faint rule styling.
         var attrs = tv.typingAttributes
-        attrs[.font] = HeadingLevel.body.font(baseSize: baseSize)
+        attrs[.font] = bodyFont
         attrs[.foregroundColor] = DS.paper
         tv.typingAttributes = attrs
         tv.didChangeText()

@@ -76,7 +76,7 @@ public enum ModuleCatalog {
     public static let clop = ModuleInfo(
         id: "clop", displayName: "Clop",
         summary: "Automatic image, video, and PDF compression on copy.",
-        symbolName: "rectangle.compress.vertical", status: .comingSoon, ownsMenuBarItem: true)
+        symbolName: "rectangle.compress.vertical", status: .available, ownsMenuBarItem: true)
 
     // Notch widget lives in the notch, so it never gets a menu bar item.
     public static let boringNotch = ModuleInfo(

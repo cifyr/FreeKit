@@ -30,9 +30,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         registry.register(StatsModule(settings: settings))
         registry.register(CapsLockModule(settings: settings, hub: eventHub))
         registry.register(AppCleanerModule(settings: settings))
+        registry.register(ClopModule(settings: settings, hub: eventHub))
         for info in [ModuleCatalog.menuBarManager, ModuleCatalog.cotypist,
                      ModuleCatalog.linearMouse,
-                     ModuleCatalog.clop, ModuleCatalog.boringNotch] {
+                     ModuleCatalog.boringNotch] {
             registry.register(PlaceholderModule(info: info))
         }
 

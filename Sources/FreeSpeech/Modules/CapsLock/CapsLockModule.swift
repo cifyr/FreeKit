@@ -127,9 +127,21 @@ final class CapsLockModule: AppModule, EventRewriter {
         let mapping = enabled
             ? "[{\"HIDKeyboardModifierMappingSrc\":\(Self.capsLockUsage),\"HIDKeyboardModifierMappingDst\":\(Self.f18Usage)}]"
             : "[]"
+        // Set both the global property AND the keyboard services directly:
+        // on recent macOS the global set alone does not reach the built-in
+        // keyboard's HID service, which left Caps Lock unmapped in practice.
+        runHidutil(["property", "--set", "{\"UserKeyMapping\":\(mapping)}"],
+                   enabled: enabled, scope: "global")
+        runHidutil(["property",
+                    "--matching", "{\"DeviceUsagePage\":1,\"DeviceUsage\":6}",
+                    "--set", "{\"UserKeyMapping\":\(mapping)}"],
+                   enabled: enabled, scope: "keyboards")
+    }
+
+    private func runHidutil(_ arguments: [String], enabled: Bool, scope: String) {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/hidutil")
-        process.arguments = ["property", "--set", "{\"UserKeyMapping\":\(mapping)}"]
+        process.arguments = arguments
         process.standardOutput = Pipe()
         let stderrPipe = Pipe()
         process.standardError = stderrPipe
@@ -140,9 +152,9 @@ final class CapsLockModule: AppModule, EventRewriter {
                 let detail = String(
                     data: stderrPipe.fileHandleForReading.readDataToEndOfFile(),
                     encoding: .utf8) ?? ""
-                Log.error("capslock: hidutil exited \(process.terminationStatus): \(detail)")
+                Log.error("capslock: hidutil (\(scope)) exited \(process.terminationStatus): \(detail)")
             } else {
-                Log.info("capslock: HID remap \(enabled ? "applied (Caps Lock -> F18)" : "cleared")")
+                Log.info("capslock: HID remap \(enabled ? "applied (Caps Lock -> F18)" : "cleared") [\(scope)]")
             }
         } catch {
             Log.error("capslock: failed to run hidutil: \(error.localizedDescription)")

@@ -1,570 +1,108 @@
 import AppKit
 import FreeSpeechCore
 
+// Composition root for the suite. Working name "FreeKit" (placeholder — rename
+// is a string change here and in ControlCenterWindow). The bundle identifier
+// and signing identity stay com.cadenwarren.freespeech / "FreeSpeech Dev" so
+// existing TCC grants keep working.
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let settings = Settings()
-    private var machine = DictationStateMachine()
-    private let hotkey = HotkeyManager()
-    private let systemHotkey = HotkeyManager()
-    private let recorder = AudioRecorder()
-    private let systemRecorder = SystemAudioRecorder()
-    // Which capture the current session uses; the machine guards cross-source events.
-    private var activeSource: AudioSource = .microphone
-    private let engine: TranscriptionEngine = WhisperCppEngine()
-    // Second engine for the tinydiarize pass; loaded lazily, only ever used for
-    // speaker-turn timestamps (its transcript text is discarded).
-    private let diarizer: TranscriptionEngine = WhisperCppEngine()
-    private let inserter = TextInserter()
-    private let postProcessor = PostProcessor()
-    private let modelDownloader = ModelDownloader()
-    private let updateManager = UpdateManager()
+    private let eventHub = EventTapHub()
     private let permissionCoach = PermissionCoachController()
-    private weak var onboardingStore: OnboardingStore?
-    private let learningStore = LearningStore(fileURL: AppPaths.learningFile)
-    private let historyStore = HistoryStore(fileURL: AppPaths.historyFile)
-    private lazy var editWatcher = EditWatcher(store: learningStore)
-    private var historyWindow: HistoryWindowController!
-    // Frontmost app when recording started: drives the per-app rewrite profile.
-    private var pendingTargetBundleID: String?
-    private var hud: HUDController!
-    private var statusBar: StatusBarController!
-    private var settingsWindow: SettingsWindowController!
-    private var onboardingWindow: OnboardingWindowController!
-    // Set while the onboarding practice step is active: transcripts route here instead
-    // of being inserted, so the user learns the hotkey without pasting into a real field.
-    private var onPracticeTranscript: ((String?) -> Void)?
-
-    // Serial queue: model load runs first, transcriptions queue behind it, so the
-    // model loads once at launch and stays warm.
-    private let whisperQueue = DispatchQueue(label: "com.cadenwarren.freespeech.whisper")
-    private static let transcriptionTimeout: TimeInterval = 30
+    private var registry: ModuleRegistry!
+    private var speech: SpeechModule!
+    private var controlCenter: ControlCenterWindowController!
+    private var homeItem: SuiteStatusItem!
 
     private var accessibilityPollTimer: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Log.setLogFile(AppPaths.logFile)
-        Log.info("FreeSpeech launching (pid \(ProcessInfo.processInfo.processIdentifier))")
+        Log.info("FreeKit suite launching (pid \(ProcessInfo.processInfo.processIdentifier))")
 
-        hud = HUDController()
-        hud.onAutoDismiss = { [weak self] in
-            guard let self else { return }
-            if case .error = self.machine.state {
-                self.perform(self.machine.handle(.errorDismissed, mode: self.settings.mode))
-            }
-        }
-        statusBar = StatusBarController(
-            settings: settings, languageModelAvailable: postProcessor.languageModelAvailable)
-        statusBar.onSettingsChanged = { [weak self] in self?.applySettings() }
-        settingsWindow = SettingsWindowController { [weak self] in
-            guard let self else { fatalError("settings store requested after teardown") }
-            return SettingsStore(
-                settings: self.settings,
-                languageModelAvailable: self.postProcessor.languageModelAvailable,
-                learningStore: self.learningStore,
-                updates: self.updateManager,
-                onHotkeyChanged: { self.installHotkey() },
-                onModelChanged: { self.applySettings() })
-        }
-        statusBar.onOpenSettings = { [weak self] in self?.settingsWindow.show() }
-        onboardingWindow = OnboardingWindowController { [weak self] close in
-            guard let self else { fatalError("onboarding store requested after teardown") }
-            let store = OnboardingStore(settings: self.settings, deps: OnboardingDeps(
-                microphoneAuthorized: { Permissions.microphoneAuthorized() },
-                requestMicrophone: { completion in
-                    Permissions.requestMicrophone { granted in
-                        // A previously-denied mic never re-prompts; guide the
-                        // user to the toggle instead of failing silently.
-                        if !granted, Permissions.microphoneDenied() {
-                            self.permissionCoach.show(.microphone)
-                        }
-                        completion(granted)
-                    }
-                },
-                accessibilityTrusted: { Permissions.accessibilityTrusted(promptIfNeeded: false) },
-                requestAccessibility: {
-                    let trusted = Permissions.accessibilityTrusted(promptIfNeeded: true)
-                    if !trusted { self.permissionCoach.show(.accessibility) }
-                    return trusted
-                },
-                installHotkey: { self.installHotkey() },
-                beginPractice: { handler in self.onPracticeTranscript = handler },
-                endPractice: { self.onPracticeTranscript = nil },
-                onFinished: close))
-            self.onboardingStore = store
-            return store
-        }
-        historyWindow = HistoryWindowController { [weak self] in
-            guard let self else { fatalError("history model requested after teardown") }
-            return HistoryViewModel(store: self.historyStore) { text in
-                // Hide our window first so the paste lands in the user's app.
-                self.historyWindow.hide()
-                NSApp.hide(nil)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-                    do {
-                        try self.inserter.insert(text, copyToClipboard: self.settings.copyToClipboard)
-                    } catch {
-                        Log.error("history re-insert failed: \(error.localizedDescription)")
-                        self.hud.show(.error(error.localizedDescription))
-                    }
-                }
-            }
-        }
-        statusBar.onOpenHistory = { [weak self] in self?.historyWindow.show() }
-        statusBar.onUndoLastDictation = { [weak self] in
-            guard let self else { return }
-            do {
-                try self.inserter.undoLastInsertion()
-            } catch {
-                Log.error("undo failed: \(error.localizedDescription)")
-                self.hud.show(.error(error.localizedDescription))
-            }
-        }
-        hud.hudPosition = settings.hudPosition
-        hud.hudStyle = settings.hudStyle
-
-        let onMaxDuration: () -> Void = { [weak self] in
-            guard let self else { return }
-            self.perform(self.machine.handle(.recordingTimedOut, mode: self.settings.mode))
-        }
-        recorder.onLevel = { [weak self] level in self?.hud.updateLevel(level) }
-        recorder.onMaxDuration = onMaxDuration
-        systemRecorder.onLevel = { [weak self] level in self?.hud.updateLevel(level) }
-        systemRecorder.onMaxDuration = onMaxDuration
-        hotkey.onEvent = { [weak self] direction in
-            guard let self else { return }
-            let event: DictationEvent = direction == .down
-                ? .hotkeyDown(.microphone) : .hotkeyUp(.microphone)
-            self.perform(self.machine.handle(event, mode: self.settings.mode))
-        }
-        systemHotkey.onEvent = { [weak self] direction in
-            guard let self else { return }
-            let event: DictationEvent = direction == .down
-                ? .hotkeyDown(.systemAudio) : .hotkeyUp(.systemAudio)
-            self.perform(self.machine.handle(event, mode: self.settings.mode))
+        registry = ModuleRegistry(settings: settings)
+        speech = SpeechModule(
+            settings: settings, hub: eventHub, permissionCoach: permissionCoach,
+            ensureEventTap: { [weak self] in self?.startEventTap(promptForAccessibility: true) })
+        registry.register(speech)
+        registry.register(NotebookModule(settings: settings, hub: eventHub))
+        registry.register(AutoclickModule(
+            settings: settings, hub: eventHub, permissionCoach: permissionCoach))
+        registry.register(StatsModule(settings: settings))
+        registry.register(CapsLockModule(settings: settings, hub: eventHub))
+        for info in [ModuleCatalog.menuBarManager, ModuleCatalog.cotypist,
+                     ModuleCatalog.appCleaner, ModuleCatalog.linearMouse,
+                     ModuleCatalog.clop, ModuleCatalog.boringNotch] {
+            registry.register(PlaceholderModule(info: info))
         }
 
-        // On first run, onboarding drives the permission prompts; don't fire them behind it.
-        if settings.hasCompletedOnboarding {
-            Permissions.requestMicrophone { granted in
-                if !granted {
-                    Log.error("microphone permission not granted — dictation will fail until enabled")
-                }
-            }
-        }
-        installHotkeyOrPollForAccessibility()
-        loadModel()
-        if !settings.hasCompletedOnboarding {
-            onboardingWindow.show()
-        }
+        controlCenter = ControlCenterWindowController(registry: registry)
+        homeItem = SuiteStatusItem(onOpenControlCenter: { [weak self] in
+            self?.controlCenter.show()
+        })
+
+        registry.activateEnabledModules()
+        installEventTapOrPollForAccessibility()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        hotkey.stop()
-        systemHotkey.stop()
-        recorder.stop()
-        systemRecorder.stop()
-        Log.info("FreeSpeech terminating")
+        // Deactivation matters beyond hygiene: the Caps Lock module must undo
+        // its hidutil remap or Caps Lock stays dead after quit.
+        for module in registry.modules
+        where module.info.status == .available && settings.moduleEnabled(id: module.info.id) {
+            module.deactivate()
+        }
+        eventHub.stop()
+        Log.info("FreeKit terminating")
     }
 
-    // MARK: - Setup
+    // MARK: - Shared event tap lifecycle
 
-    private func installHotkeyOrPollForAccessibility() {
+    private func installEventTapOrPollForAccessibility() {
         // During onboarding the setup window owns the permission UX, so stay quiet here.
         let onboarded = settings.hasCompletedOnboarding
         if Permissions.accessibilityTrusted(promptIfNeeded: onboarded) {
-            installHotkey()
+            startEventTap(promptForAccessibility: false)
             return
         }
         if onboarded {
-            showError("Accessibility not granted — enable FreeSpeech in System Settings > Privacy & Security > Accessibility")
+            speechIfEnabled?.noteAccessibilityMissing()
             permissionCoach.show(.accessibility)
         }
-        // Poll until granted: AX trust can change at any time and there is no notification API.
+        beginAccessibilityPoll()
+    }
+
+    // Poll until granted: AX trust can change at any time and there is no notification API.
+    private func beginAccessibilityPoll() {
+        guard accessibilityPollTimer == nil else { return }
         accessibilityPollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
             guard let self, Permissions.accessibilityTrusted(promptIfNeeded: false) else { return }
             self.accessibilityPollTimer?.invalidate()
             self.accessibilityPollTimer = nil
-            Log.info("accessibility granted, installing hotkey")
-            self.installHotkey()
-            self.perform(self.machine.handle(.errorDismissed, mode: self.settings.mode))
-            self.hud.dismiss()
+            Log.info("accessibility granted, starting event tap")
+            self.startEventTap(promptForAccessibility: false)
         }
     }
 
-    private func installHotkey() {
-        do {
-            try hotkey.start(preset: settings.hotkey)
-        } catch {
-            Log.error("hotkey installation failed: \(error.localizedDescription)")
-            showError(error.localizedDescription)
-        }
-        let mic = settings.hotkey
-        let system = settings.systemAudioHotkey
-        guard mic.keyCode != system.keyCode || mic.modifiers != system.modifiers
-                || mic.kind != system.kind else {
-            Log.error("system audio hotkey \(system.displayName) collides with the mic hotkey, not installing it")
-            showError("System audio hotkey matches the mic hotkey — pick a different one in Settings")
-            systemHotkey.stop()
+    private func startEventTap(promptForAccessibility: Bool) {
+        guard !eventHub.isRunning else { return }
+        if promptForAccessibility, !Permissions.accessibilityTrusted(promptIfNeeded: true) {
+            beginAccessibilityPoll()
             return
         }
         do {
-            try systemHotkey.start(preset: system)
+            try eventHub.start()
+            speechIfEnabled?.noteAccessibilityGranted()
         } catch {
-            Log.error("system audio hotkey installation failed: \(error.localizedDescription)")
-            showError(error.localizedDescription)
+            Log.error("event tap start failed: \(error.localizedDescription)")
+            speechIfEnabled?.noteAccessibilityMissing()
+            beginAccessibilityPoll()
         }
     }
 
-    private func loadModel() {
-        let url = AppPaths.modelFile(named: settings.modelName)
-        loadedModelPath = url.path
-        if FileManager.default.fileExists(atPath: url.path) {
-            loadModelFile(url)
-        } else {
-            // First run of a shared copy: fetch the model once, then load it.
-            downloadThenLoad(name: settings.modelName, to: url)
-        }
-    }
-
-    private func loadModelFile(_ url: URL) {
-        whisperQueue.async { [weak self] in
-            guard let self else { return }
-            do {
-                try self.engine.loadModel(at: url)
-            } catch {
-                Log.error("model load failed: \(error.localizedDescription)")
-                DispatchQueue.main.async { self.showError(error.localizedDescription) }
-            }
-        }
-    }
-
-    private func downloadThenLoad(name: String, to url: URL) {
-        Log.info("model \(name) not on disk, downloading once")
-        setModelStatus("Downloading model 0%")
-        modelDownloader.download(modelName: name, to: url, progress: { [weak self] frac in
-            DispatchQueue.main.async { self?.setModelStatus("Downloading model \(Int(frac * 100))%") }
-        }, completion: { [weak self] result in
-            DispatchQueue.main.async {
-                guard let self else { return }
-                switch result {
-                case .success(let file):
-                    self.setModelStatus(nil)
-                    self.loadModelFile(file)
-                case .failure(let error):
-                    self.setModelStatus(nil)
-                    self.showError("Model download failed: \(error.localizedDescription). Check your connection, then reopen FreeSpeech.")
-                }
-            }
-        })
-    }
-
-    private func setModelStatus(_ text: String?) {
-        onboardingStore?.modelStatus = text
-        statusBar.showTransientStatus(text)
-    }
-
-    private func applySettings() {
-        installHotkey()
-        hud.hudPosition = settings.hudPosition
-        hud.hudStyle = settings.hudStyle
-        if AppPaths.modelFile(named: settings.modelName).path != loadedModelPath {
-            loadModel()
-        }
-        ensureDiarizerModelDownloaded()
-        statusBar.update(state: machine.state)
-    }
-
-    // Covers enabling split-speakers from the menu bar, where no settings window
-    // exists to drive the one-time tinydiarize download.
-    private var diarizerDownloadInFlight = false
-    private func ensureDiarizerModelDownloaded() {
-        guard settings.splitSpeakersEnabled, !diarizerDownloadInFlight else { return }
-        let name = FreeSpeechCore.Settings.diarizerModelName
-        let destination = AppPaths.modelFile(named: name)
-        guard !FileManager.default.fileExists(atPath: destination.path) else { return }
-        diarizerDownloadInFlight = true
-        Log.info("split speakers enabled without \(name) on disk, downloading")
-        statusBar.showTransientStatus("Downloading speaker model\u{2026}")
-        modelDownloader.download(
-            modelName: name, to: destination,
-            progress: { [weak self] fraction in
-                DispatchQueue.main.async {
-                    self?.statusBar.showTransientStatus(
-                        "Downloading speaker model\u{2026} \(Int(fraction * 100))%")
-                }
-            },
-            completion: { [weak self] result in
-                DispatchQueue.main.async {
-                    guard let self else { return }
-                    self.diarizerDownloadInFlight = false
-                    self.statusBar.showTransientStatus(nil)
-                    if case .failure(let error) = result {
-                        Log.error("speaker model download failed: \(error.localizedDescription)")
-                        self.hud.show(.error("Speaker model download failed — toggle Split Speakers to retry"))
-                    }
-                }
-            })
-    }
-    private var loadedModelPath: String = ""
-
-    // MARK: - Pipeline
-
-    private func perform(_ action: DictationAction) {
-        statusBar.update(state: machine.state)
-        switch action {
-        case .startRecording(let source):
-            startRecording(source: source)
-        case .stopAndTranscribe:
-            stopAndTranscribe()
-        case .abortRecording(let reason):
-            // Never leave any capture hot after an error, whichever source ran.
-            recorder.stop()
-            systemRecorder.stop()
-            hud.show(.error(reason))
-        case .showError(let reason):
-            hud.show(.error(reason))
-        case .becameIdle:
-            break
-        case .none:
-            break
-        }
-    }
-
-    private func startRecording(source: AudioSource) {
-        activeSource = source
-        pendingTargetBundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
-        captureScreenContext()
-        SoundCues.play(.start, enabled: settings.soundCuesEnabled)
-        switch source {
-        case .microphone:
-            guard Permissions.microphoneAuthorized() else {
-                permissionCoach.show(.microphone)
-                perform(machine.handle(.recordingFailed("Microphone not granted — enable FreeSpeech in System Settings > Privacy & Security > Microphone"), mode: settings.mode))
-                return
-            }
-            // HUD first: it must appear the instant the hotkey fires.
-            hud.show(.recording(.microphone))
-            do {
-                try recorder.start(
-                    maxSeconds: settings.maxRecordingSeconds,
-                    device: AudioDevices.preferredDevice(priority: settings.micPriority))
-            } catch {
-                Log.error("recording start failed: \(error.localizedDescription)")
-                perform(machine.handle(.recordingFailed(error.localizedDescription), mode: settings.mode))
-            }
-
-        case .systemAudio:
-            // Screen Recording permission is requested lazily, only for this mode.
-            guard Permissions.screenRecordingAuthorized(requestIfNeeded: true) else {
-                permissionCoach.show(.screenRecording)
-                perform(machine.handle(.recordingFailed(SystemAudioError.permissionDenied.errorDescription ?? "Screen Recording not granted"), mode: settings.mode))
-                return
-            }
-            hud.show(.recording(.systemAudio))
-            systemRecorder.start(maxSeconds: settings.maxRecordingSeconds) { [weak self] error in
-                guard let self, let error else { return }
-                self.perform(self.machine.handle(
-                    .recordingFailed(error.localizedDescription), mode: self.settings.mode))
-            }
-        }
-    }
-
-    // Reads names visible in the focused field/window while the user is still
-    // speaking, so the terms are ready by transcription time at zero latency cost.
-    private var pendingContextTerms: [String] = []
-    private let contextQueue = DispatchQueue(
-        label: "com.cadenwarren.freespeech.screencontext", qos: .userInitiated)
-
-    private func captureScreenContext() {
-        pendingContextTerms = []
-        guard settings.screenContextEnabled else { return }
-        contextQueue.async { [weak self] in
-            guard let self else { return }
-            let terms = AXFieldReader.screenContextText()
-                .map { ScreenContext.properNouns(in: $0) } ?? []
-            if !terms.isEmpty {
-                Log.info("screen context terms: \(terms.joined(separator: ", "))")
-            }
-            DispatchQueue.main.async { self.pendingContextTerms = terms }
-        }
-    }
-
-    private func stopAndTranscribe() {
-        let samples = activeSource == .systemAudio ? systemRecorder.stop() : recorder.stop()
-        hud.show(.transcribing)
-
-        let stoppedAt = CFAbsoluteTimeGetCurrent()
-        let contextTerms = pendingContextTerms
-        whisperQueue.async { [weak self] in
-            guard let self else { return }
-
-            // Skip whisper entirely for silence: avoids garbage output and wasted work.
-            let peak = samples.map(abs).max() ?? 0
-            if peak < 0.005 {
-                Log.info("no speech detected (peak amplitude \(peak)), skipping transcription")
-                DispatchQueue.main.async { self.finish(transcript: nil, stoppedAt: stoppedAt) }
-                return
-            }
-
-            do {
-                // Learned terms extend the vocabulary hint so whisper hears the
-                // user's words right the first time.
-                var hint = self.settings.vocabularyHint
-                let learnedTerms = self.learningStore.vocabularyTerms()
-                    .filter { !hint.localizedCaseInsensitiveContains($0) }
-                if !learnedTerms.isEmpty {
-                    hint += " " + learnedTerms.joined(separator: ", ") + "."
-                }
-                // Names visible on screen when recording started (email thread,
-                // chat window) bias whisper toward what the user is replying to.
-                let screenTerms = contextTerms
-                    .filter { !hint.localizedCaseInsensitiveContains($0) }
-                if !screenTerms.isEmpty {
-                    hint += " " + screenTerms.joined(separator: ", ") + "."
-                }
-                let raw: String
-                let splitSpeakers = self.activeSource == .systemAudio
-                    && self.settings.splitSpeakersEnabled
-                    && self.ensureDiarizerLoaded()
-                if splitSpeakers {
-                    // Two passes: the accurate model for word-timestamped text,
-                    // tinydiarize only for the times where the voice changes.
-                    let segments = try self.engine.transcribeSegments(
-                        samples: samples, timeout: Self.transcriptionTimeout,
-                        beamSize: 1, vocabularyHint: hint,
-                        language: self.settings.language,
-                        detectSpeakerTurns: false, tokenTimestamps: true)
-                    let turnSegments = try self.diarizer.transcribeSegments(
-                        samples: samples, timeout: Self.transcriptionTimeout,
-                        beamSize: 1, vocabularyHint: nil,
-                        language: "en", detectSpeakerTurns: true, tokenTimestamps: false)
-                    let turns = turnSegments.filter(\.speakerTurnNext).map(\.end)
-                    let pieces = segments.flatMap(\.tokens)
-                        .map { TimedSegment(start: $0.start, end: $0.end, text: $0.text) }
-                    Log.info("speaker split: \(turns.count) turn(s) detected across \(pieces.count) words")
-                    raw = SpeakerSplitter.merged(pieces: pieces, turnTimes: turns)
-                } else {
-                    raw = try self.engine.transcribe(
-                        samples: samples, timeout: Self.transcriptionTimeout,
-                        beamSize: 1, vocabularyHint: hint, language: self.settings.language)
-                }
-                // Per-app profile: the app being dictated into can override the mode.
-                let mode = self.settings.postProcessing(forApp: self.pendingTargetBundleID)
-                // "Do nothing" means raw whisper output, only trimmed so pasting is sane.
-                var text: String? = mode == .off
-                    ? raw.trimmingCharacters(in: .whitespacesAndNewlines)
-                    : (splitSpeakers
-                        ? TranscriptCleaner.cleanPreservingLines(raw)
-                        : TranscriptCleaner.clean(raw))
-                if let t = text, mode != .off {
-                    // Deterministic transforms, all effectively free: learned rules,
-                    // the user's dictionary, filler removal, then spoken commands
-                    // (so "scratch that" sees the final wording).
-                    var transformed = self.learningStore.apply(to: t)
-                    transformed = TextReplacements.apply(
-                        rules: self.settings.customReplacements, to: transformed)
-                    if self.settings.fillerStrippingEnabled {
-                        transformed = FillerWords.strip(transformed)
-                    }
-                    if self.settings.spokenCommandsEnabled {
-                        transformed = SpokenCommands.apply(to: transformed)
-                    }
-                    text = transformed
-                }
-                if text?.isEmpty == true { text = nil }
-                if let cleaned = text, mode.needsLanguageModel {
-                    if splitSpeakers {
-                        // Rewrites would merge lines and lose the speaker turns.
-                        Log.info("skipping \(mode.rawValue) rewrite for speaker-split transcript")
-                    } else {
-                        DispatchQueue.main.async { self.hud.show(.processing) }
-                        text = self.postProcessor.process(cleaned, mode: mode, tone: self.settings.tone)
-                    }
-                }
-                let result = text
-                DispatchQueue.main.async { self.finish(transcript: result, stoppedAt: stoppedAt) }
-            } catch {
-                Log.error("transcription failed: \(error.localizedDescription)")
-                DispatchQueue.main.async {
-                    self.perform(self.machine.handle(
-                        .transcriptionFailed(error.localizedDescription), mode: self.settings.mode))
-                }
-            }
-        }
-    }
-
-    // Loads the tinydiarize model once, on the whisper queue. Missing model or
-    // load failure degrades to an unsplit transcript, never a failed dictation.
-    private func ensureDiarizerLoaded() -> Bool {
-        if diarizer.isLoaded { return true }
-        let url = AppPaths.modelFile(named: FreeSpeechCore.Settings.diarizerModelName)
-        guard FileManager.default.fileExists(atPath: url.path) else {
-            Log.error("split speakers enabled but \(url.lastPathComponent) is missing — re-toggle the setting to download it")
-            return false
-        }
-        do {
-            try diarizer.loadModel(at: url)
-            return true
-        } catch {
-            Log.error("diarizer model load failed: \(error.localizedDescription)")
-            return false
-        }
-    }
-
-    private func finish(transcript: String?, stoppedAt: CFAbsoluteTime) {
-        // Onboarding practice: show what was heard in the setup window, never insert.
-        if let practice = onPracticeTranscript {
-            practice(transcript)
-            hud.show(transcript == nil ? .error("No speech detected") : .success)
-            _ = machine.handle(.transcriptionSucceeded, mode: settings.mode)
-            statusBar.update(state: machine.state)
-            return
-        }
-        guard let transcript else {
-            hud.show(.error("No speech detected"))
-            SoundCues.play(.error, enabled: settings.soundCuesEnabled)
-            _ = machine.handle(.transcriptionSucceeded, mode: settings.mode)
-            statusBar.update(state: machine.state)
-            return
-        }
-        do {
-            let inserted = try inserter.insert(transcript, copyToClipboard: settings.copyToClipboard)
-            Log.info(String(format: "stop-to-insert latency: %.2fs", CFAbsoluteTimeGetCurrent() - stoppedAt))
-            if inserted.isEmpty {
-                // Everything the user said was already at the caret.
-                hud.show(.error("Nothing new to insert"))
-            } else {
-                hud.show(.success)
-                SoundCues.play(.inserted, enabled: settings.soundCuesEnabled)
-                if settings.historyEnabled {
-                    historyStore.append(HistoryEntry(
-                        timestamp: Date(),
-                        text: inserted,
-                        appName: NSWorkspace.shared.frontmostApplication?.localizedName ?? "unknown",
-                        source: activeSource.rawValue))
-                }
-            }
-            perform(machine.handle(.transcriptionSucceeded, mode: settings.mode))
-            if settings.learningEnabled, !inserted.isEmpty {
-                editWatcher.watch(inserted: inserted)
-            }
-        } catch {
-            Log.error("insertion failed: \(error.localizedDescription)")
-            SoundCues.play(.error, enabled: settings.soundCuesEnabled)
-            perform(machine.handle(.transcriptionFailed(error.localizedDescription), mode: settings.mode))
-        }
-    }
-
-    private func showError(_ message: String) {
-        // Force the machine into a visible, recoverable error state from any point.
-        switch machine.state {
-        case .recording:
-            perform(machine.handle(.recordingFailed(message), mode: settings.mode))
-        case .transcribing:
-            perform(machine.handle(.transcriptionFailed(message), mode: settings.mode))
-        default:
-            hud.show(.error(message))
-            statusBar.update(state: .error(message))
-        }
+    // Accessibility errors surface through Speech's HUD/status item, but only
+    // when that module is actually on.
+    private var speechIfEnabled: SpeechModule? {
+        settings.moduleEnabled(id: ModuleCatalog.speech.id) ? speech : nil
     }
 }

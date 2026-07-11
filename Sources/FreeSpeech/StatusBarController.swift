@@ -26,6 +26,12 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         update(state: .idle)
     }
 
+    // Suite modules can be hidden from the menu bar without tearing down the
+    // controller; the item keeps its state while invisible.
+    func setVisible(_ visible: Bool) {
+        statusItem.isVisible = visible
+    }
+
     // Overrides the menu/tooltip line with a transient message (e.g. model download
     // progress); passing nil restores the normal state line.
     func showTransientStatus(_ text: String?) {

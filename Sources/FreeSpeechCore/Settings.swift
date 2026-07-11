@@ -110,6 +110,16 @@ public final class Settings {
         self.defaults = defaults
     }
 
+    // Backing-store access for same-module extensions (per-module suite keys in
+    // ModuleCatalog.swift) without making `defaults` public.
+    func defaultsValue(forKey key: String) -> Any? {
+        defaults.object(forKey: key)
+    }
+
+    func setDefaultsValue(_ value: Any?, forKey key: String) {
+        defaults.set(value, forKey: key)
+    }
+
     public var mode: ActivationMode {
         get { defaults.string(forKey: Key.mode).flatMap(ActivationMode.init) ?? .pushToTalk }
         set { defaults.set(newValue.rawValue, forKey: Key.mode) }
@@ -359,6 +369,9 @@ public enum AppPaths {
     }
     public static var historyFile: URL {
         appSupport.appendingPathComponent("history.jsonl")
+    }
+    public static var notesDir: URL {
+        appSupport.appendingPathComponent("notes", isDirectory: true)
     }
     public static func installedModels() -> [String] {
         let files = (try? FileManager.default.contentsOfDirectory(atPath: modelsDir.path)) ?? []

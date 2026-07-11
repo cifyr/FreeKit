@@ -21,6 +21,7 @@ let package = Package(
                 .linkedFramework("MetalKit"),
                 .linkedFramework("Accelerate"),
                 .linkedFramework("FoundationModels"),
+                .linkedFramework("IOKit"),
                 .linkedLibrary("c++"),
             ]
         ),

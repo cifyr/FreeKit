@@ -52,8 +52,12 @@ struct HotkeyRecorderButton: View {
                             .strokeBorder(
                                 capturing ? Color.dsAccent.opacity(0.6) : Color.dsLine,
                                 lineWidth: 1))
+                    // Accent + "Press keys…" swap fade in rather than cut on toggle.
+                    .dsContentCrossfade(capturing)
+                    // While recording, the keycap breathes so "listening for keys" reads as alive; settles instantly when done.
+                    .dsLivePulse(capturing, dimTo: 0.6)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.dsPress)
         }
         .onDisappear { if capturing { capture.end(); capturing = false } }
     }

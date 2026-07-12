@@ -95,8 +95,17 @@ struct DSSettingsCard<Content: View>: View {
     let title: String
     @ViewBuilder let content: Content
     @ObservedObject private var appearance = AppearanceManager.shared
+    @State private var appeared = false
 
     var body: some View {
+        Group {
+            if appeared { card.transition(.dsAppear) }
+        }
+        // Cards fade + rise in when the settings window opens; instant under Reduce Motion.
+        .onAppear { withAnimation(DS.animAppear()) { appeared = true } }
+    }
+
+    private var card: some View {
         VStack(alignment: .leading, spacing: appearance.density.contentSpacing) {
             DSSectionLabel(title)
             content
@@ -167,6 +176,7 @@ struct DSToggleRow: View {
             Spacer(minLength: 0)
         }
         .contentShape(Rectangle())
+        .dsHoverHighlight(cornerRadius: DS.radiusKeycap)
         .onTapGesture { isOn.toggle() }
     }
 }
@@ -198,6 +208,8 @@ struct DSNumberField: View {
             .overlay(
                 RoundedRectangle(cornerRadius: DS.radiusKeycap, style: .continuous)
                     .strokeBorder(focused ? Color.dsAccent.opacity(0.6) : Color.dsLine, lineWidth: 1))
+            // Focus accent border fades in rather than snapping.
+            .animation(DS.animInstant, value: focused)
             .onAppear { text = format(value) }
             .onChange(of: value) { _, newValue in
                 if !focused { text = format(newValue) }

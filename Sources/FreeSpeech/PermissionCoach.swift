@@ -94,7 +94,7 @@ final class PermissionCoachController {
         // System Settings takes a moment to launch; the first ticks find and
         // track its window, later ones watch for the grant.
         reposition()
-        panel.orderFrontRegardless()
+        panel.dsFadeIn(duration: DS.durBase)
         pollTimer = Timer.scheduledTimer(withTimeInterval: 0.75, repeats: true) { [weak self] _ in
             self?.tick()
         }
@@ -133,10 +133,9 @@ final class PermissionCoachController {
 
     private func fadeOutAndDismiss() {
         guard let panel else { return }
-        NSAnimationContext.runAnimationGroup({ ctx in
-            ctx.duration = DS.durBase
+        DSMotionAppKit.run(duration: DS.durBase, { _ in
             panel.animator().alphaValue = 0
-        }, completionHandler: { [weak self] in
+        }, completion: { [weak self] in
             self?.dismiss()
         })
     }
@@ -229,6 +228,6 @@ private struct PermissionCoachView: View {
                     in: RoundedRectangle(cornerRadius: DS.radiusControl, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: DS.radiusControl, style: .continuous)
             .strokeBorder(Color.dsLine, lineWidth: 1))
-        .animation(.easeOut(duration: DS.hudCrossfade), value: state.granted)
+        .animation(DS.animCrossfade, value: state.granted)
     }
 }

@@ -184,6 +184,7 @@ private struct CapsLockSettingsPane: View {
                 Text(modifiers.symbols.isEmpty ? "nothing" : modifiers.symbols)
                     .font(.system(size: 13, weight: .semibold, design: .monospaced))
                     .foregroundStyle(modifiers.symbols.isEmpty ? Color.dsFaint : Color.dsAccent)
+                    .dsContentCrossfade(modifiers.symbols)
             }
             HStack(spacing: 8) {
                 DSChip(title: "\u{2726} Hyper", selected: modifiers == .hyper) {

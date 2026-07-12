@@ -89,12 +89,11 @@ final class BoringBatteryModel: ObservableObject {
     func stop() { timer?.invalidate(); timer = nil }
 
     func refresh() {
-        guard let snapshot = IOPSCopyPowerSourcesInfo()?.takeRetainedValue(),
-              let sources = IOPSCopyPowerSourcesList(snapshot).takeRetainedValue() as? [CFTypeRef]
-        else {
-            Log.error("notch battery: could not read power sources")
+        guard let snapshot = IOPSCopyPowerSourcesInfo()?.takeRetainedValue() else {
+            Log.error("notch battery: IOPSCopyPowerSourcesInfo returned nil")
             return
         }
+        let sources = IOPSCopyPowerSourcesList(snapshot).takeRetainedValue() as [CFTypeRef]
         for source in sources {
             guard let info = IOPSGetPowerSourceDescription(snapshot, source)?.takeUnretainedValue()
                 as? [String: Any] else { continue }
@@ -375,6 +374,7 @@ final class BoringNotchPanelController {
     private let state = BoringNotchPanelState()
     private let media = BoringNowPlayingModel.shared
     private let calendar = BoringCalendarModel.shared
+    private let battery = BoringBatteryModel.shared
     private var subscriptions: Set<AnyCancellable> = []
     private var collapseWork: DispatchWorkItem?
     private var peekWork: DispatchWorkItem?
@@ -406,6 +406,7 @@ final class BoringNotchPanelController {
                 self.updateFrame(animated: true)
                 self.preferences.showMedia ? self.media.start() : self.media.stop()
                 self.preferences.showCalendar ? self.calendar.start() : self.calendar.stop()
+                self.preferences.showBattery ? self.battery.start() : self.battery.stop()
                 self.media.refresh()
                 self.calendar.refresh()
             }
@@ -426,9 +427,10 @@ final class BoringNotchPanelController {
         updateFrame(animated: false); panel.orderFrontRegardless()
         if preferences.showMedia { media.start() }
         if preferences.showCalendar { calendar.start() }
+        if preferences.showBattery { battery.start() }
     }
     func hide() {
-        collapseWork?.cancel(); peekWork?.cancel(); media.stop(); calendar.stop()
+        collapseWork?.cancel(); peekWork?.cancel(); media.stop(); calendar.stop(); battery.stop()
         panel.orderOut(nil); coordinator.clearNotch()
     }
     private func setExpanded(_ expanded: Bool) {
@@ -518,6 +520,7 @@ struct BoringNotchPanelView: View {
     @ObservedObject var state: BoringNotchPanelState
     @ObservedObject var media: BoringNowPlayingModel
     @ObservedObject var calendar: BoringCalendarModel
+    @ObservedObject var battery = BoringBatteryModel.shared
     let onToggle: () -> Void
     let onPin: () -> Void
     let onHover: (Bool) -> Void
@@ -529,6 +532,10 @@ struct BoringNotchPanelView: View {
                 : NotchMetrics.closedBottomRadius)
     }
     private var animation: Animation { state.expanded ? NotchMetrics.open : NotchMetrics.close }
+    /// Only widen the hover target while closed — once open the panel is its own target.
+    private var hoverTolerance: CGFloat {
+        state.expanded ? 0 : CGFloat(max(0, min(40, preferences.hoverTolerance)))
+    }
     var body: some View {
         // Sits at the top of an oversized window. Only this sized view exists, so the empty margin
         // around it never hit-tests and clicks pass through to the menu bar.
@@ -536,6 +543,11 @@ struct BoringNotchPanelView: View {
             .frame(width: state.currentSize.width, height: state.currentSize.height)
             .background(Color.black, in: shape)
             .clipShape(shape)
+            // Hover target grows beyond the visible shape only if the user asks for it; at the
+            // default of 0 the pointer must be on the cutout itself, not merely near it.
+            .frame(width: state.currentSize.width + 2 * hoverTolerance,
+                   height: state.currentSize.height + hoverTolerance,
+                   alignment: .top)
             .contentShape(Rectangle())
             .onHover(perform: onHover)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -585,10 +597,51 @@ struct BoringNotchPanelView: View {
         }
         .padding(.horizontal, 8)
     }
+    /// Clock and battery flank the cutout in the strip it occupies — the only row where the notch
+    /// steals horizontal space, so it may as well earn it.
+    private var headerStrip: some View {
+        HStack(spacing: 0) {
+            Group {
+                if preferences.showClock {
+                    TimelineView(.everyMinute) { context in
+                        Text(context.date, format: .dateTime.hour().minute())
+                            .font(.system(size: 12, weight: .semibold, design: .rounded))
+                            .foregroundStyle(Color.white.opacity(0.85))
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Color.clear.frame(width: state.physicalNotchWidth)
+            Group {
+                if preferences.showBattery {
+                    HStack(spacing: 5) {
+                        Text("\(battery.percent)%")
+                            .font(.system(size: 11, weight: .semibold, design: .rounded))
+                            .foregroundStyle(Color.white.opacity(0.85))
+                        Image(systemName: battery.charging ? "battery.100.bolt" : batterySymbol)
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(battery.charging ? Color.dsAccent : Color.white.opacity(0.7))
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .trailing)
+        }
+        .frame(height: state.hasPhysicalNotch ? state.physicalNotchHeight : 22)
+    }
+    private var batterySymbol: String {
+        switch battery.percent {
+        case ..<13: return "battery.0"
+        case ..<38: return "battery.25"
+        case ..<63: return "battery.50"
+        case ..<88: return "battery.75"
+        default: return "battery.100"
+        }
+    }
     private var expandedContent: some View {
         VStack(spacing: 0) {
-            // The physical cutout owns this strip; anything drawn here is hidden behind it.
-            Color.clear.frame(height: state.hasPhysicalNotch ? state.physicalNotchHeight : 0)
+            // The physical cutout owns this strip; the clock and battery fill the space beside it.
+            headerStrip
+                .padding(.horizontal, NotchMetrics.openTopRadius + 11)
             HStack(alignment: .center, spacing: 18) {
                 if preferences.showMedia {
                     mediaWing.frame(maxWidth: .infinity, alignment: .leading)
@@ -620,9 +673,9 @@ struct BoringNotchPanelView: View {
             HStack(spacing: 12) {
                 artworkView(size: 52)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(media.item?.title ?? "Nothing Playing").font(.system(size: 14, weight: .bold))
+                    Text(media.item?.title ?? "Nothing Playing").font(.system(size: 15, weight: .bold))
                         .foregroundStyle(Color.white).lineLimit(1)
-                    Text(media.item?.artist ?? "Open Spotify or Music").font(.system(size: 11, weight: .medium))
+                    Text(media.item?.artist ?? "Open Spotify or Music").font(.system(size: 12, weight: .medium))
                         .foregroundStyle(Color.white.opacity(0.42)).lineLimit(1)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -630,8 +683,8 @@ struct BoringNotchPanelView: View {
             scrubber.opacity(media.item == nil ? 0.3 : 1)
             HStack(spacing: 0) {
                 Text(playbackTime(media.item?.position ?? 0))
-                    .font(.system(size: 8.5, weight: .medium, design: .monospaced))
-                    .foregroundStyle(Color.white.opacity(0.32))
+                    .font(.system(size: 9.5, weight: .medium, design: .monospaced))
+                    .foregroundStyle(Color.white.opacity(0.35))
                     .frame(maxWidth: .infinity, alignment: .leading)
                 HStack(spacing: 5) {
                     playerButton("backward.fill", help: "Previous", action: media.previous)
@@ -643,8 +696,8 @@ struct BoringNotchPanelView: View {
                 .fixedSize()
                 .disabled(media.item == nil).opacity(media.item == nil ? 0.3 : 1)
                 Text("-" + playbackTime(max(0, (media.item?.duration ?? 0) - (media.item?.position ?? 0))))
-                    .font(.system(size: 8.5, weight: .medium, design: .monospaced))
-                    .foregroundStyle(Color.white.opacity(0.32))
+                    .font(.system(size: 9.5, weight: .medium, design: .monospaced))
+                    .foregroundStyle(Color.white.opacity(0.35))
                     .frame(maxWidth: .infinity, alignment: .trailing)
             }
         }
@@ -696,7 +749,7 @@ struct BoringNotchPanelView: View {
     private var calendarWing: some View {
         VStack(alignment: .trailing, spacing: 7) {
             Text("UP NEXT")
-                .font(.system(size: 8, weight: .semibold, design: .monospaced))
+                .font(.system(size: 9, weight: .semibold, design: .monospaced))
                 .kerning(0.6)
                 .foregroundStyle(Color.white.opacity(0.28))
             if calendar.upcomingEvents.isEmpty {
@@ -707,14 +760,14 @@ struct BoringNotchPanelView: View {
                     HStack(spacing: 8) {
                         VStack(alignment: .trailing, spacing: 2) {
                             Text(event.title)
-                                .font(.system(size: 11, weight: .semibold))
+                                .font(.system(size: 12, weight: .semibold))
                                 .foregroundStyle(Color.white)
                                 .lineLimit(1)
                             HStack(spacing: 5) {
                                 Text(event.startDate, format: .dateTime.hour().minute())
-                                    .font(.system(size: 9, weight: .medium, design: .monospaced))
+                                    .font(.system(size: 10, weight: .medium, design: .monospaced))
                                 Text(event.calendarName).lineLimit(1)
-                                    .font(.system(size: 9, weight: .medium))
+                                    .font(.system(size: 10, weight: .medium))
                             }
                             .foregroundStyle(Color.white.opacity(0.38))
                         }
@@ -774,8 +827,19 @@ struct BoringNotchSettingsPane: View {
                 slider("Content height", value: $preferences.expandedHeight, range: 112...200)
                 slider("Corner radius", value: $preferences.cornerRadius, range: 12...34)
             }
+            DSSettingsCard(title: "Menu bar strip") {
+                DSToggleRow(title: "Show clock", isOn: $preferences.showClock)
+                DSToggleRow(title: "Show battery", isOn: $preferences.showBattery)
+            }
             DSSettingsCard(title: "Behavior") {
                 DSToggleRow(title: "Expand on hover", isOn: $preferences.expandOnHover)
+                VStack(alignment: .leading, spacing: 2) {
+                    slider("Hover reach", value: $preferences.hoverTolerance, range: 0...40)
+                    Text(preferences.hoverTolerance < 1
+                         ? "Expands only when the pointer is on the notch itself."
+                         : "Expands within \(Int(preferences.hoverTolerance))pt of the notch.")
+                        .font(.system(size: 10)).foregroundStyle(Color.dsFaint)
+                }
                 DSToggleRow(title: "Collapse after leaving", isOn: $preferences.autoCollapse)
                 slider("Collapse delay", value: $preferences.collapseDelay, range: 0.2...5, suffix: "s")
                 DSToggleRow(title: "Show accent indicator", isOn: $preferences.showAccent)
@@ -797,15 +861,24 @@ struct BoringNotchSettingsPane: View {
 private struct BoringNotchPreview: View {
     var body: some View {
         VStack(spacing: 0) {
-            ZStack {
-                Color.clear
-                UnevenRoundedRectangle(topLeadingRadius: 0, bottomLeadingRadius: 7,
-                                       bottomTrailingRadius: 7, topTrailingRadius: 0, style: .continuous)
+            HStack(spacing: 0) {
+                Text("12:19")
+                    .font(.system(size: 10, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color.white.opacity(0.85))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                NotchShape(topCornerRadius: 4, bottomCornerRadius: 7)
                     .fill(Color.dsInk0)
                     .frame(width: 132, height: 26)
-                    .frame(maxHeight: .infinity, alignment: .top)
+                HStack(spacing: 4) {
+                    Text("85%").font(.system(size: 9, weight: .semibold, design: .rounded))
+                        .foregroundStyle(Color.white.opacity(0.85))
+                    Image(systemName: "battery.75").font(.system(size: 10))
+                        .foregroundStyle(Color.white.opacity(0.7))
+                }
+                .frame(maxWidth: .infinity, alignment: .trailing)
             }
             .frame(height: 26)
+            .padding(.horizontal, 14)
             HStack(alignment: .top, spacing: 12) {
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(spacing: 8) {

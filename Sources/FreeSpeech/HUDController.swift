@@ -209,8 +209,8 @@ final class HUDController {
         dot.layer?.removeAllAnimations()
         dot.layer?.backgroundColor = DS.accent.cgColor
         dot.layer?.cornerRadius = 3
-        if dotStyle == .pulsing {
-            // Breathes symmetrically: opacity .35->1, scale .82->1, 1.4s round trip.
+        if dotStyle == .pulsing && !DS.reduceMotion {
+            // Symmetric breathing, mirroring DS.animPulse: 0.9s ease-in-out, 1.8s round trip.
             let opacity = CABasicAnimation(keyPath: "opacity")
             opacity.fromValue = 0.35
             opacity.toValue = 1.0
@@ -219,10 +219,10 @@ final class HUDController {
             scale.toValue = 1.0
             let group = CAAnimationGroup()
             group.animations = [opacity, scale]
-            group.duration = 0.7
+            group.duration = 0.9
             group.autoreverses = true
             group.repeatCount = .infinity
-            group.timingFunction = CAMediaTimingFunction(controlPoints: 0.4, 0, 0.2, 1)
+            group.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
             dot.layer?.add(group, forKey: "pulse")
         }
         crossfade(toWave: false)
@@ -245,37 +245,37 @@ final class HUDController {
 
     // The waveform and status swap by opacity, never a hard cut.
     private func crossfade(toWave: Bool) {
-        NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = DS.hudCrossfade
-            ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0, 0, 1)
-            waveRow.animator().alphaValue = toWave ? 1 : 0
-            statusRow.animator().alphaValue = toWave ? 0 : 1
+        DSMotionAppKit.run(duration: DS.hudCrossfade) { _ in
+            self.waveRow.animator().alphaValue = toWave ? 1 : 0
+            self.statusRow.animator().alphaValue = toWave ? 0 : 1
         }
     }
 
     private func animateIn() {
-        panel.alphaValue = 0
         let target = panel.frame
-        panel.setFrame(target.offsetBy(dx: 0, dy: -8), display: false)
+        panel.alphaValue = 0
+        // A few points of upward travel into place; Reduce Motion drops the slide.
+        panel.setFrame(DS.reduceMotion ? target : target.offsetBy(dx: 0, dy: -6), display: false)
         panel.orderFrontRegardless()
-        NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.18
-            ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0, 0, 1)
-            panel.animator().alphaValue = 1
-            panel.animator().setFrame(target, display: true)
+        DSMotionAppKit.run(duration: DS.durBase) { _ in
+            self.panel.animator().alphaValue = 1
+            self.panel.animator().setFrame(target, display: true)
         }
     }
 
     private func scheduleDismiss(after seconds: TimeInterval) {
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
-            NSAnimationContext.runAnimationGroup({ ctx in
-                ctx.duration = 0.25
+            let target = self.panel.frame
+            let sunk = DS.reduceMotion ? target : target.offsetBy(dx: 0, dy: -6)
+            DSMotionAppKit.run(duration: DS.durBase, { _ in
                 self.panel.animator().alphaValue = 0
-            }, completionHandler: {
+                self.panel.animator().setFrame(sunk, display: true)
+            }, completion: {
                 self.waveform.stopAnimating()
                 self.panel.orderOut(nil)
                 self.panel.alphaValue = 1
+                self.panel.setFrame(target, display: false)
                 self.onAutoDismiss?()
             })
         }
@@ -352,7 +352,9 @@ final class WaveformLineView: NSView {
         guard timer == nil else { return }
         timer = Timer.scheduledTimer(withTimeInterval: Self.frameInterval, repeats: true) { [weak self] _ in
             guard let self else { return }
-            if self.mode == .automatic { self.phase += Self.frameInterval }
+            // Phase drives both the automatic wave and the live idle ripple; same
+            // timer, so idling adds no cost over the redraw already scheduled.
+            self.phase += Self.frameInterval
             self.needsDisplay = true
         }
         RunLoop.main.add(timer!, forMode: .common)
@@ -377,7 +379,12 @@ final class WaveformLineView: NSView {
                 let strength = min(1.0, Double(envelope) * 3.2)
                 let texture = 0.56 + 0.22 * sin(p * .pi * 5.0)
                     + 0.18 * cos(p * .pi * 8.0)
-                v = max(0.05, texture * window * strength)
+                let speech = texture * window * strength
+                // Symmetric idle ripple: a low breathing standing wave when silent,
+                // fading out as speech rises. Frozen (no phase) under Reduce Motion.
+                let sway = DS.reduceMotion ? 0.0 : 0.05 * sin(p * .pi * 3.0 + phase * 1.6)
+                let idle = (0.09 + sway) * window * (1.0 - strength)
+                v = max(0.05, speech + idle)
             case .automatic:
                 let s1 = sin(p * .pi * 2 * 1.4 + phase * 2.1)
                 let s2 = sin(p * .pi * 2 * 0.6 - phase * 1.15)

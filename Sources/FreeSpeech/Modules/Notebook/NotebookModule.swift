@@ -555,7 +555,7 @@ struct NotebookView: View {
         }
         .background(AppearanceBackground())
         .frame(minWidth: 480, minHeight: 340)
-        .animation(.easeOut(duration: DS.durBase), value: config.sidebarVisible)
+        .animation(DS.animBase, value: config.sidebarVisible)
         .onChange(of: config.sortOrder) { _, _ in model.refresh() }
     }
 
@@ -927,6 +927,8 @@ private struct NoteRow: View {
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .animation(DS.animInstant, value: hovering)
+        // Selecting a note eases the accent title + fill in, per the grammar's select timing.
+        .animation(DS.animBase, value: selected)
     }
 
     private var preview: String {

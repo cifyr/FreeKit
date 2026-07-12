@@ -38,10 +38,13 @@ public enum ModuleCatalog {
         summary: "Floating scratch notes on a global hotkey. Searchable, styled, saved to disk.",
         symbolName: "note.text", status: .available, ownsMenuBarItem: true)
 
+    // App-style tools (see `apps`) manage their own status item: it appears
+    // only while the tool is open, so ownsMenuBarItem stays false and the
+    // registry never forces it visible.
     public static let autoclicker = ModuleInfo(
         id: "autoclicker", displayName: "Tap",
         summary: "Autoclicker: fixed-interval clicks at the cursor or a set point.",
-        symbolName: "cursorarrow.click.2", status: .available, ownsMenuBarItem: true)
+        symbolName: "cursorarrow.click.2", status: .available, ownsMenuBarItem: false)
 
     public static let stats = ModuleInfo(
         id: "stats", displayName: "Stats",
@@ -53,11 +56,6 @@ public enum ModuleCatalog {
         summary: "Remap Caps Lock to a hyper key, Command, or tap-for-Escape.",
         symbolName: "capslock", status: .available, ownsMenuBarItem: false)
 
-    public static let menuBarManager = ModuleInfo(
-        id: "menubar", displayName: "Menu Bar",
-        summary: "A configurable shelf for FreeKit tools and their menu bar controls.",
-        symbolName: "menubar.rectangle", status: .available, ownsMenuBarItem: true)
-
     public static let cotypist = ModuleInfo(
         id: "cotypist", displayName: "Cotypist",
         summary: "On-device inline text prediction anywhere you type.",
@@ -66,7 +64,7 @@ public enum ModuleCatalog {
     public static let appCleaner = ModuleInfo(
         id: "appcleaner", displayName: "AppCleaner",
         summary: "Uninstall apps together with their leftover support files.",
-        symbolName: "trash", status: .available, ownsMenuBarItem: true)
+        symbolName: "trash", status: .available, ownsMenuBarItem: false)
 
     public static let linearMouse = ModuleInfo(
         id: "linearmouse", displayName: "LinearMouse",
@@ -91,8 +89,12 @@ public enum ModuleCatalog {
 
     public static let all: [ModuleInfo] = [
         speech, notebook, autoclicker, stats, capsLock,
-        menuBarManager, cotypist, appCleaner, linearMouse, clop, shelf, boringNotch,
+        cotypist, appCleaner, linearMouse, clop, shelf, boringNotch,
     ]
+
+    // Tools that read as small apps rather than ambient utilities; the control
+    // center fronts these in the Apps tab with a one-click Open.
+    public static let apps: [ModuleInfo] = [appCleaner, autoclicker]
 
     public static func find(id: String) -> ModuleInfo? {
         all.first { $0.id == id }

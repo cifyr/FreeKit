@@ -303,7 +303,7 @@ struct BoringNotchPanelView: View {
                 HStack(spacing: 8) {
                     ForEach(quickModules.prefix(6), id: \.info.id) { module in
                         Button { onOpen(module) } label: {
-                            Image(systemName: MenuBarPreferences.shared.symbol(for: module.info))
+                            Image(systemName: module.info.symbolName)
                                 .font(.system(size: 14, weight: .semibold))
                                 .foregroundStyle(Color.dsAccent)
                                 .frame(maxWidth: .infinity)

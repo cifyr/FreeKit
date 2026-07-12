@@ -11,6 +11,9 @@ final class ModuleSettingsWindowController {
     private let contentSize: NSSize
     private let minimumSize: NSSize
     private let makePane: () -> AnyView
+    // App-style modules key their menu bar presence off this: true on show,
+    // false when the user closes the window.
+    var onVisibilityChange: ((Bool) -> Void)?
 
     init(
         info: ModuleInfo,
@@ -41,10 +44,16 @@ final class ModuleSettingsWindowController {
             w.isMovableByWindowBackground = true
             w.isReleasedWhenClosed = false
             w.center()
+            NotificationCenter.default.addObserver(
+                forName: NSWindow.willCloseNotification, object: w, queue: .main
+            ) { [weak self] _ in
+                self?.onVisibilityChange?(false)
+            }
             window = w
         }
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        onVisibilityChange?(true)
         Log.info("settings window opened: \(info.id)")
     }
 }

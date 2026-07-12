@@ -29,9 +29,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             settings: settings, hub: eventHub, permissionCoach: permissionCoach))
         registry.register(StatsModule(settings: settings))
         registry.register(CapsLockModule(settings: settings, hub: eventHub))
-        registry.register(MenuBarModule(
-            registry: registry,
-            onOpenControlCenter: { [weak self] in self?.controlCenter.show() }))
         registry.register(AppCleanerModule(settings: settings))
         registry.register(BoringNotchModule(registry: registry))
         registry.register(ClopModule(settings: settings, hub: eventHub))

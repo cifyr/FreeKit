@@ -9,13 +9,19 @@ final class AppCleanerModule: NSObject, AppModule {
     private let config: AppCleanerConfig
     private let model: AppCleanerViewModel
     private var statusItem: NSStatusItem?
-    private lazy var settingsWindow = ModuleSettingsWindowController(
-        info: info,
-        contentSize: NSSize(width: 820, height: 650),
-        minimumSize: NSSize(width: 680, height: 480)
-    ) { [config, model] in
-        AnyView(AppCleanerView(model: model, config: config))
-    }
+    private lazy var settingsWindow: ModuleSettingsWindowController = {
+        let controller = ModuleSettingsWindowController(
+            info: info,
+            contentSize: NSSize(width: 820, height: 650),
+            minimumSize: NSSize(width: 680, height: 480)
+        ) { [config, model] in
+            AnyView(AppCleanerView(model: model, config: config))
+        }
+        controller.onVisibilityChange = { [weak self] visible in
+            self?.setStatusItemVisible(visible)
+        }
+        return controller
+    }()
 
     init(settings: Settings) {
         config = AppCleanerConfig(settings: settings)
@@ -23,8 +29,21 @@ final class AppCleanerModule: NSObject, AppModule {
         super.init()
     }
 
-    func activate() {
-        if statusItem == nil {
+    // Scanning waits for openSettings: an "app" that isn't open should not be
+    // spawning du subprocesses at suite launch.
+    func activate() {}
+
+    func deactivate() {
+        statusItem?.isVisible = false
+        model.cancelScan()
+    }
+
+    // App-style module: the registry never drives this item (ownsMenuBarItem
+    // is false); it tracks the window instead.
+    func setMenuBarItemVisible(_ visible: Bool) {}
+
+    private func setStatusItemVisible(_ visible: Bool) {
+        if visible, statusItem == nil {
             let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
             if let button = item.button {
                 button.image = NSImage(systemSymbolName: info.symbolName,
@@ -35,15 +54,6 @@ final class AppCleanerModule: NSObject, AppModule {
             }
             statusItem = item
         }
-        model.scan(includeSystemApps: config.includeSystemApps)
-    }
-
-    func deactivate() {
-        statusItem?.isVisible = false
-        model.cancelScan()
-    }
-
-    func setMenuBarItemVisible(_ visible: Bool) {
         statusItem?.isVisible = visible
     }
 

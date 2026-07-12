@@ -42,18 +42,29 @@ struct ControlCenterView: View {
     @ObservedObject var registry: ModuleRegistry
     @ObservedObject private var appearance = AppearanceManager.shared
     @State private var expandedID: String?
-    @State private var selectedSection: Section = .tools
+    @State private var selectedSection: Section = .apps
 
     private enum Section: String, CaseIterable {
+        case apps = "Apps"
         case tools = "Tools"
         case appearance = "Appearance"
-        case menuBar = "Menu Bar"
         case roadmap = "Roadmap"
     }
 
+    private static let appIDs = Set(ModuleCatalog.apps.map(\.id))
+
     private var visibleModules: [ModuleInfo] {
-        registry.modules.map(\.info).filter {
-            selectedSection == .tools ? $0.status == .available : $0.status == .comingSoon
+        registry.modules.map(\.info).filter { info in
+            switch selectedSection {
+            case .apps:
+                return info.status == .available && Self.appIDs.contains(info.id)
+            case .tools:
+                return info.status == .available && !Self.appIDs.contains(info.id)
+            case .roadmap:
+                return info.status == .comingSoon
+            case .appearance:
+                return false
+            }
         }
     }
 
@@ -67,7 +78,7 @@ struct ControlCenterView: View {
                 Text("Control Center")
                     .font(.system(size: 28, weight: .heavy))
                     .foregroundStyle(Color.dsPaper)
-                Text("One process, one menu bar, many small tools. Enable what you use.")
+                Text("One process, many small tools. Enable what you use.")
                     .font(.system(size: 12))
                     .foregroundStyle(Color.dsMuted)
                 HStack(spacing: 22) {
@@ -86,8 +97,6 @@ struct ControlCenterView: View {
             }
             if selectedSection == .appearance {
                 AppearancePane()
-            } else if selectedSection == .menuBar {
-                MenuBarPane(registry: registry)
             } else {
                 ScrollView {
                     LazyVStack(spacing: appearance.density.contentSpacing) {
@@ -96,6 +105,7 @@ struct ControlCenterView: View {
                                 registry: registry,
                                 info: info,
                                 expanded: expandedID == info.id,
+                                showsOpenButton: selectedSection == .apps,
                                 onToggleExpanded: {
                                     withAnimation(.easeOut(duration: DS.durBase)) {
                                         expandedID = expandedID == info.id ? nil : info.id
@@ -112,17 +122,6 @@ struct ControlCenterView: View {
         .frame(minWidth: 560, idealWidth: 600, maxWidth: .infinity,
                minHeight: 480, idealHeight: 720, maxHeight: .infinity)
         .background(AppearanceBackground())
-    }
-}
-
-private struct MenuBarPane: View {
-    @ObservedObject var registry: ModuleRegistry
-
-    var body: some View {
-        ScrollView {
-            MenuBarSettingsPane(registry: registry)
-                .padding(.bottom, 12)
-        }
     }
 }
 
@@ -358,6 +357,7 @@ private struct ModuleCard: View {
     @ObservedObject private var appearance = AppearanceManager.shared
     let info: ModuleInfo
     let expanded: Bool
+    var showsOpenButton = false
     let onToggleExpanded: () -> Void
     @State private var hovering = false
 
@@ -404,24 +404,29 @@ private struct ModuleCard: View {
                 Spacer(minLength: 12)
 
                 if !comingSoon {
-                    toggleColumn(
-                        label: "ON",
-                        isOn: Binding(
-                            get: { registry.isEnabled(id: info.id) },
-                            set: { registry.setEnabled($0, id: info.id) }))
-                    if info.ownsMenuBarItem {
+                    // App cards have no enabled concept in the UI: Open is the
+                    // whole lifecycle.
+                    if !showsOpenButton {
                         toggleColumn(
-                            label: "MENU BAR",
+                            label: "ON",
                             isOn: Binding(
-                                get: { registry.showsMenuBarItem(id: info.id) },
-                                set: { registry.setShowsMenuBarItem($0, id: info.id) }))
-                        .opacity(enabled ? 1 : 0.4)
-                        .disabled(!enabled)
+                                get: { registry.isEnabled(id: info.id) },
+                                set: { registry.setEnabled($0, id: info.id) }))
+                    }
+                    if showsOpenButton {
+                        // One click: enabling on demand means Open always works.
+                        Button("Open") {
+                            if !enabled { registry.setEnabled(true, id: info.id) }
+                            registry.module(id: info.id)?.openSettings()
+                        }
+                        .buttonStyle(PrimaryButtonStyle())
+                        .help("Open \(info.displayName)")
                     }
                     // Rich tools open their own settings window; simple ones
-                    // (Caps Lock) disclose the few controls right here.
+                    // (Caps Lock) disclose the few controls right here. App
+                    // cards skip the gear — Open reaches the same window.
                     switch registry.module(id: info.id)?.settingsStyle {
-                    case .window:
+                    case .window where !showsOpenButton:
                         Button {
                             registry.module(id: info.id)?.openSettings()
                         } label: {

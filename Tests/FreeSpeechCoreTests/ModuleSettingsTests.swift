@@ -26,6 +26,18 @@ final class ModuleSettingsTests: XCTestCase {
         XCTAssertFalse(ModuleCatalog.boringNotch.ownsMenuBarItem)
     }
 
+    // The Apps tab renders these with a one-click Open, so every entry must be
+    // a buildable catalog member, not a coming-soon placeholder. Apps manage
+    // their own open-window-only status item, so the registry must never own it.
+    func testAppsAreAvailableCatalogMembers() {
+        XCTAssertFalse(ModuleCatalog.apps.isEmpty)
+        for info in ModuleCatalog.apps {
+            XCTAssertEqual(info.status, .available, "\(info.id) must be available")
+            XCTAssertTrue(ModuleCatalog.all.contains(info), "\(info.id) missing from catalog")
+            XCTAssertFalse(info.ownsMenuBarItem, "\(info.id) must self-manage its menu bar item")
+        }
+    }
+
     // Speech predates the suite so it must stay on after the upgrade; new tools
     // start off to keep the menu bar quiet until the user opts in.
     func testOnlySpeechIsEnabledByDefault() {

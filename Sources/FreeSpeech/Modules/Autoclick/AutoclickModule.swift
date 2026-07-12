@@ -20,13 +20,21 @@ final class AutoclickModule: NSObject, AppModule, NSMenuDelegate {
     private var startGeneration = 0
     private let macroRunner = MacroRunner()
     private let paneModel = AutoclickPaneModel()
-    private lazy var settingsWindow = ModuleSettingsWindowController(
-        info: info,
-        contentSize: NSSize(width: 640, height: 720),
-        minimumSize: NSSize(width: 560, height: 480)
-    ) { [weak self] in
-        self?.makeSettingsPane() ?? AnyView(EmptyView())
-    }
+    private var settingsWindowOpen = false
+    private lazy var settingsWindow: ModuleSettingsWindowController = {
+        let controller = ModuleSettingsWindowController(
+            info: info,
+            contentSize: NSSize(width: 640, height: 720),
+            minimumSize: NSSize(width: 560, height: 480)
+        ) { [weak self] in
+            self?.makeSettingsPane() ?? AnyView(EmptyView())
+        }
+        controller.onVisibilityChange = { [weak self] visible in
+            self?.settingsWindowOpen = visible
+            self?.updateStatusIcon()
+        }
+        return controller
+    }()
 
     enum Key {
         static let interval = "interval"
@@ -136,22 +144,9 @@ final class AutoclickModule: NSObject, AppModule, NSMenuDelegate {
         hotkeyToken = nil
     }
 
-    func setMenuBarItemVisible(_ visible: Bool) {
-        if visible {
-            if statusItem == nil {
-                let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-                item.button?.toolTip = "Tap autoclicker"
-                let menu = NSMenu()
-                menu.delegate = self
-                item.menu = menu
-                statusItem = item
-                updateStatusIcon()
-            }
-            statusItem?.isVisible = true
-        } else {
-            statusItem?.isVisible = false
-        }
-    }
+    // App-style module: the registry never drives this item (ownsMenuBarItem
+    // is false). Presence is derived in updateStatusIcon instead.
+    func setMenuBarItemVisible(_ visible: Bool) {}
 
     func openSettings() {
         settingsWindow.show()
@@ -352,8 +347,20 @@ final class AutoclickModule: NSObject, AppModule, NSMenuDelegate {
         return CGPoint(x: loc.x, y: screenHeight - loc.y)
     }
 
+    // Also decides menu bar presence: the icon exists while Tap's window is
+    // open or a run is live, so a hotkey-started run is never invisible.
     private func updateStatusIcon() {
-        guard let button = statusItem?.button else { return }
+        let shouldShow = settingsWindowOpen || isRunning
+        if shouldShow, statusItem == nil {
+            let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+            item.button?.toolTip = "Tap autoclicker"
+            let menu = NSMenu()
+            menu.delegate = self
+            item.menu = menu
+            statusItem = item
+        }
+        statusItem?.isVisible = shouldShow
+        guard shouldShow, let button = statusItem?.button else { return }
         button.image = NSImage(
             systemSymbolName: isRunning ? "cursorarrow.click.badge.clock" : "cursorarrow.click.2",
             accessibilityDescription: pendingStart ? "Tap waiting to start" : (isRunning ? "Tap running" : "Tap idle"))

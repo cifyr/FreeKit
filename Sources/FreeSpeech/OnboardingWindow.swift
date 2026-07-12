@@ -154,6 +154,8 @@ struct OnboardingView: View {
     @ObservedObject var store: OnboardingStore
     @ObservedObject private var appearance = AppearanceManager.shared
     @FocusState private var practiceFocused: Bool
+    // Drives the step transition's direction: forward slides in from the right.
+    @State private var forward = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -164,24 +166,40 @@ struct OnboardingView: View {
                     Text(status.uppercased())
                         .font(.system(size: 10, weight: .medium, design: .monospaced)).kerning(1)
                         .foregroundStyle(Color.dsMuted)
+                        .dsContentCrossfade(status)
                     Spacer()
                 }
                 .padding(.horizontal, 28).padding(.vertical, 8)
                 .background(Color.dsInk1)
+                .transition(.dsAppear)
             }
             ScrollView {
                 content
+                    .id(store.step)
+                    .transition(stepTransition)
                     .padding(.horizontal, 28)
                     .padding(.vertical, 24)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .animation(DS.animBase, value: store.step)
             footer
         }
         .frame(width: 520, height: 600)
         .background(AppearanceBackground())
-        .onChange(of: store.step) { _, newStep in
+        .animation(DS.animBase, value: store.modelStatus)
+        .onChange(of: store.step) { oldStep, newStep in
+            forward = newStep.rawValue >= oldStep.rawValue
             practiceFocused = (newStep == .practice)
         }
+    }
+
+    // Calm directional swap: content enters from the travel direction with a
+    // short offset and a fade; the outgoing step leaves the opposite way.
+    private var stepTransition: AnyTransition {
+        let dx: CGFloat = forward ? 14 : -14
+        return .asymmetric(
+            insertion: .opacity.combined(with: .offset(x: dx)),
+            removal: .opacity.combined(with: .offset(x: -dx)))
     }
 
     @ViewBuilder private var content: some View {
@@ -252,8 +270,11 @@ struct OnboardingView: View {
                     .padding(10)
                     .frame(height: 150)
                     .background(Color.dsInk2, in: RoundedRectangle(cornerRadius: DS.radiusControl, style: .continuous))
+                    // Focused = live and listening: the accent ring breathes, reserved for voice.
                     .overlay(RoundedRectangle(cornerRadius: DS.radiusControl, style: .continuous)
-                        .strokeBorder(practiceFocused ? Color.dsAccent : Color.dsLine, lineWidth: 1))
+                        .strokeBorder(practiceFocused ? Color.dsAccent : Color.dsLine, lineWidth: 1)
+                        .dsLivePulse(practiceFocused, dimTo: 0.5)
+                        .animation(DS.animBase, value: practiceFocused))
                 HStack {
                     body("Not hearing you well? Check your input device and model in Settings.")
                         .foregroundStyle(Color.dsFaint)
@@ -311,6 +332,7 @@ struct OnboardingView: View {
                     .font(.system(size: 11, weight: .medium, design: .monospaced))
                     .kerning(0.8)
                     .foregroundStyle(capturing || current.id == "custom" ? Color.dsAccent : Color.dsMuted)
+                    .dsContentCrossfade(capturing)
                 Spacer()
                 Button(capturing ? "Cancel" : "Record") {
                     capturing ? store.cancelRecord() : store.recordHotkey(target)
@@ -322,6 +344,7 @@ struct OnboardingView: View {
         .background(Color.dsInk1, in: RoundedRectangle(cornerRadius: DS.radiusCard, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: DS.radiusCard, style: .continuous)
             .strokeBorder(capturing ? Color.dsAccent : Color.dsLine, lineWidth: 1))
+        .animation(DS.animBase, value: capturing)
     }
 
     private var modeNote: String {
@@ -342,6 +365,7 @@ struct OnboardingView: View {
                 Text("STEP \(store.stepIndex) / \(store.stepCount)")
                     .font(.system(size: 11, weight: .medium, design: .monospaced)).kerning(1.2)
                     .foregroundStyle(Color.dsMuted)
+                    .dsValueTransition(store.stepIndex)
             }
             // Segmented tracks: done/current paper, upcoming hairline — progress
             // reads as steps, and paper keeps accent reserved for the live voice.
@@ -352,7 +376,7 @@ struct OnboardingView: View {
                         .frame(height: 3)
                 }
             }
-            .animation(.easeOut(duration: DS.durBase), value: store.stepIndex)
+            .animation(DS.animBase, value: store.stepIndex)
         }
         .padding(.horizontal, 28).padding(.top, 22)
     }
@@ -368,6 +392,7 @@ struct OnboardingView: View {
             Button(action: { store.next() }) {
                 Text(store.step == .done ? "Start dictating" : "Continue")
                     .font(.system(size: 13, weight: .semibold))
+                    .dsContentCrossfade(store.step == .done)
                     .foregroundStyle(primaryEnabled ? Color.dsInk0 : Color.dsFaint)
                     .padding(.horizontal, 18)
                     .frame(height: 38)
@@ -402,6 +427,7 @@ struct OnboardingView: View {
                 Text("GRANTED")
                     .font(.system(size: 10, weight: .medium, design: .monospaced)).kerning(1)
                     .foregroundStyle(Color.dsMuted)
+                    .transition(.scale(scale: 0.9).combined(with: .opacity))
             } else {
                 Button("Grant", action: action).buttonStyle(GhostButtonStyle())
             }
@@ -410,6 +436,7 @@ struct OnboardingView: View {
         .background(Color.dsInk1, in: RoundedRectangle(cornerRadius: DS.radiusControl, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: DS.radiusControl, style: .continuous)
             .strokeBorder(Color.dsLine, lineWidth: 1))
+        .animation(DS.animBase, value: granted)
     }
 
     private func chip(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {

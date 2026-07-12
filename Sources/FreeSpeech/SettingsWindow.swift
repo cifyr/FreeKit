@@ -339,16 +339,16 @@ struct SettingsView: View {
     }
 
     @ViewBuilder private var generalTab: some View {
-        activationCard
-        feedbackCard
-        updatesCard
+        activationCard.staggeredAppear(0)
+        feedbackCard.staggeredAppear(1)
+        updatesCard.staggeredAppear(2)
     }
 
     @ViewBuilder private var audioTab: some View {
-        micPriorityCard
-        modelCard
-        languageCard
-        splitSpeakersCard
+        micPriorityCard.staggeredAppear(0)
+        modelCard.staggeredAppear(1)
+        languageCard.staggeredAppear(2)
+        splitSpeakersCard.staggeredAppear(3)
     }
 
     @ViewBuilder private var splitSpeakersCard: some View {
@@ -370,20 +370,20 @@ struct SettingsView: View {
     }
 
     @ViewBuilder private var textTab: some View {
-        dictationCard
-        clipboardCard
-        replacementCard
+        dictationCard.staggeredAppear(0)
+        clipboardCard.staggeredAppear(1)
+        replacementCard.staggeredAppear(2)
     }
 
     @ViewBuilder private var rewriteTab: some View {
-        postProcessingCard
-        perAppCard
+        postProcessingCard.staggeredAppear(0)
+        perAppCard.staggeredAppear(1)
     }
 
     @ViewBuilder private var personalizeTab: some View {
-        vocabularyCard
-        learningCard
-        historyCard
+        vocabularyCard.staggeredAppear(0)
+        learningCard.staggeredAppear(1)
+        historyCard.staggeredAppear(2)
     }
 
     @ViewBuilder private var activationCard: some View {
@@ -446,7 +446,7 @@ struct SettingsView: View {
                                     .background(Color.dsInk2, in: Circle())
                                     .overlay(Circle().strokeBorder(Color.dsLine, lineWidth: 1))
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(.dsPress)
                             .help("Prefer this microphone")
                             Text(mic.name)
                                 .font(.system(size: 13, weight: .semibold))
@@ -656,10 +656,12 @@ struct SettingsView: View {
                                     .font(.system(size: 10, weight: .semibold))
                                     .foregroundStyle(Color.dsMuted)
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(.dsPress)
                         }
                         .padding(.vertical, 2)
+                        .transition(.dsAppear)
                     }
+                    .animation(DS.animBase, value: store.replacements.count)
                     HStack(spacing: 8) {
                         settingsField("heard as", text: $store.newReplacementFrom)
                         Text("\u{2192}").foregroundStyle(Color.dsFaint)
@@ -696,10 +698,12 @@ struct SettingsView: View {
                                     .font(.system(size: 10, weight: .semibold))
                                     .foregroundStyle(Color.dsMuted)
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(.dsPress)
                         }
                         .padding(.vertical, 2)
+                        .transition(.dsAppear)
                     }
+                    .animation(DS.animBase, value: store.appProfiles.count)
                     Menu {
                         ForEach(store.runningApps, id: \.bundleID) { app in
                             Menu(app.name) {
@@ -994,11 +998,11 @@ struct SettingsView: View {
                     selected ? Color.dsInk3 : (hovering && !disabled ? Color.dsInk3.opacity(0.6) : Color.clear),
                     in: RoundedRectangle(cornerRadius: DS.radiusControl, style: .continuous))
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.dsPress)
             .disabled(disabled)
             .onHover { hovering = $0 }
-            .animation(.easeOut(duration: DS.durInstant), value: hovering)
-            .animation(.easeOut(duration: DS.durBase), value: selected)
+            .animation(DS.animInstant, value: hovering)
+            .animation(DS.animBase, value: selected)
         }
     }
 
@@ -1016,6 +1020,27 @@ struct SettingsView: View {
         if let size { line += "  ·  \(size)" }
         return line
     }
+}
+
+// Cards fade and rise a few points as they appear, lightly staggered so a tab's
+// content settles in sequence instead of snapping in as a block. Re-fires per tab
+// switch because each tab renders fresh card identities.
+private struct StaggeredAppear: ViewModifier {
+    let index: Int
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var shown = false
+    func body(content: Content) -> some View {
+        content
+            .opacity(shown ? 1 : 0)
+            .offset(y: shown ? 0 : 5)
+            .onAppear {
+                withAnimation(DS.animAppear(index: index, reduceMotion: reduceMotion)) { shown = true }
+            }
+    }
+}
+
+private extension View {
+    func staggeredAppear(_ index: Int) -> some View { modifier(StaggeredAppear(index: index)) }
 }
 
 final class SettingsWindowController {

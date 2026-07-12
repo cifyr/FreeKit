@@ -361,6 +361,7 @@ struct AppCleanerView: View {
                         Rectangle().fill(Color.dsLine).frame(width: 1)
                         detail
                             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                            .animation(DS.animBase, value: model.selectedID)
                     }
                 }
                 .transition(.dsCrossfade)
@@ -485,9 +486,14 @@ struct AppCleanerView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 DSSectionLabel(model.isScanning ? "Scanning \(model.scannedCount)" : "\(filteredApps.count) Applications")
+                    .dsContentCrossfade(model.isScanning)
                 Spacer()
-                if model.isScanning { ProgressView().controlSize(.small).tint(Color.dsAccent) }
+                if model.isScanning {
+                    ProgressView().controlSize(.small).tint(Color.dsAccent)
+                        .transition(.dsCrossfade)
+                }
             }
+            .animation(DS.animCrossfade, value: model.isScanning)
             ScrollView {
                 LazyVStack(spacing: 3) {
                     ForEach(filteredApps) { app in
@@ -567,14 +573,19 @@ struct AppCleanerView: View {
                         .buttonStyle(PrimaryButtonStyle())
                 }
             }
+            // Fresh identity per app so switching selection fades + rises the detail in.
+            .id(app.id)
+            .transition(.dsAppear)
         } else {
             VStack(spacing: 10) {
                 Image(systemName: "square.stack.3d.up.slash")
                     .font(.system(size: 26)).foregroundStyle(Color.dsFaint)
                 Text(model.isScanning ? "Scanning applications\u{2026}" : "Select an application")
                     .font(.system(size: 13, weight: .semibold)).foregroundStyle(Color.dsMuted)
+                    .dsContentCrossfade(model.isScanning)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .transition(.dsCrossfade)
         }
     }
 

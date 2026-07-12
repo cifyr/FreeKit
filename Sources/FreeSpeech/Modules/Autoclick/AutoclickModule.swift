@@ -645,13 +645,21 @@ private struct AutoclickSettingsPane: View {
                         Text(model.module?.isRunning == true ? "Running" : "Ready")
                             .font(.system(size: 13, weight: .semibold))
                             .foregroundStyle(model.module?.isRunning == true ? Color.dsAccent : Color.dsPaper)
+                            // Running/Ready and its accent (reserved for live voice) ease in on state change.
+                            .dsContentCrossfade(model.module?.isRunning == true)
+                            .animation(DS.animBase, value: model.module?.isRunning == true)
                         Text(runSummary)
                             .font(.system(size: 11))
                             .foregroundStyle(Color.dsFaint)
+                            // The live click/pass tally settles rather than snapping each tick.
+                            .dsContentCrossfade(runSummary)
                     }
                     Spacer()
-                    Button(model.module?.isRunning == true ? "Stop" : "Start") {
+                    Button {
                         model.module?.toggleClicking()
+                    } label: {
+                        Text(model.module?.isRunning == true ? "Stop" : "Start")
+                            .dsContentCrossfade(model.module?.isRunning == true)
                     }
                     .buttonStyle(GhostButtonStyle())
                 }
@@ -1089,7 +1097,7 @@ private struct MacroEditorSection: View {
                     .font(.system(size: 9, weight: .semibold))
                     .foregroundStyle(index == 0 ? Color.dsFaint : Color.dsMuted)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.dsPress)
             .disabled(index == 0)
             Button {
                 move(index: index, by: 1)
@@ -1098,7 +1106,7 @@ private struct MacroEditorSection: View {
                     .font(.system(size: 9, weight: .semibold))
                     .foregroundStyle(index == macro.steps.count - 1 ? Color.dsFaint : Color.dsMuted)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.dsPress)
             .disabled(index == macro.steps.count - 1)
             Button {
                 macro.steps.remove(at: index)
@@ -1108,7 +1116,7 @@ private struct MacroEditorSection: View {
                     .font(.system(size: 10))
                     .foregroundStyle(Color.dsMuted)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.dsPress)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)

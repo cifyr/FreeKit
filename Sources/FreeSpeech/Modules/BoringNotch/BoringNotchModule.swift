@@ -324,11 +324,8 @@ enum NotchMetrics {
     static let closedBottomRadius: CGFloat = 14
     static let openTopRadius: CGFloat = 19
     static let openBottomRadius: CGFloat = 24
-    /// Slack around the shape so its flared shoulders and any overshoot stay inside the window.
+    /// Slack around the shape so its flared shoulders stay inside the window.
     static let windowPadding: CGFloat = 24
-    /// Opening gets a touch of overshoot; closing is critically damped so it doesn't bounce shut.
-    static let open: Animation = .spring(response: 0.42, dampingFraction: 0.8)
-    static let close: Animation = .spring(response: 0.45, dampingFraction: 1.0)
 }
 
 /// The top corners curve *outward* into the menu bar rather than in, so the panel reads as the
@@ -531,7 +528,8 @@ struct BoringNotchPanelView: View {
                 ? CGFloat(max(12, min(34, preferences.cornerRadius)))
                 : NotchMetrics.closedBottomRadius)
     }
-    private var animation: Animation { state.expanded ? NotchMetrics.open : NotchMetrics.close }
+    // Expand/collapse consumes the shared critically damped grammar so the notch reads physical, never bouncy.
+    private var expandAnimation: Animation? { DS.animExpand() }
     /// Only widen the hover target while closed — once open the panel is its own target.
     private var hoverTolerance: CGFloat {
         state.expanded ? 0 : CGFloat(max(0, min(40, preferences.hoverTolerance)))
@@ -539,7 +537,12 @@ struct BoringNotchPanelView: View {
     var body: some View {
         // Sits at the top of an oversized window. Only this sized view exists, so the empty margin
         // around it never hit-tests and clicks pass through to the menu bar.
-        Group { if state.expanded { expandedContent } else { collapsedContent } }
+        Group {
+            if state.expanded { expandedContent.transition(.dsCrossfade) }
+            else { collapsedContent.transition(.dsCrossfade) }
+        }
+            // Content swap crossfades on the shorter grammar timing, independent of the shape's spring.
+            .animation(DS.animCrossfade, value: state.expanded)
             .frame(width: state.currentSize.width, height: state.currentSize.height)
             .background(Color.black, in: shape)
             .clipShape(shape)
@@ -551,9 +554,9 @@ struct BoringNotchPanelView: View {
             .contentShape(Rectangle())
             .onHover(perform: onHover)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .animation(animation, value: state.expanded)
-            .animation(animation, value: state.peeking)
-            .animation(animation, value: state.currentSize)
+            .animation(expandAnimation, value: state.expanded)
+            .animation(expandAnimation, value: state.peeking)
+            .animation(expandAnimation, value: state.currentSize)
     }
     private var collapsedContent: some View {
         Group {

@@ -63,6 +63,39 @@ final class ModuleSettingsTests: XCTestCase {
         XCTAssertFalse(settings.moduleShowsMenuBarItem(id: "stats"))
     }
 
+    // Every menu-bar-owning tool gets a MENU toggle in the control center: each
+    // must start visible, survive a relaunch, and never drag the others with it.
+    func testMenuBarItemTogglesAreIndependentPerModule() {
+        let owners = ModuleCatalog.all.filter(\.ownsMenuBarItem)
+        XCTAssertFalse(owners.isEmpty)
+        for info in owners {
+            XCTAssertTrue(settings.moduleShowsMenuBarItem(id: info.id),
+                          "\(info.id) should default to a visible menu bar item")
+        }
+
+        settings.setModuleShowsMenuBarItem(false, id: ModuleCatalog.stats.id)
+
+        let restored = Settings(defaults: defaults)
+        XCTAssertFalse(restored.moduleShowsMenuBarItem(id: ModuleCatalog.stats.id))
+        for info in owners where info.id != ModuleCatalog.stats.id {
+            XCTAssertTrue(restored.moduleShowsMenuBarItem(id: info.id),
+                          "hiding stats must not hide \(info.id)")
+        }
+    }
+
+    // Hiding the item is independent of enabling the tool: a hidden Stats stays
+    // enabled (its settings window still works), and re-showing needs no relaunch.
+    func testMenuBarItemVisibilityIsIndependentOfEnabled() {
+        settings.setModuleEnabled(true, id: ModuleCatalog.stats.id)
+        settings.setModuleShowsMenuBarItem(false, id: ModuleCatalog.stats.id)
+
+        XCTAssertTrue(settings.moduleEnabled(id: ModuleCatalog.stats.id))
+        XCTAssertFalse(settings.moduleShowsMenuBarItem(id: ModuleCatalog.stats.id))
+
+        settings.setModuleShowsMenuBarItem(true, id: ModuleCatalog.stats.id)
+        XCTAssertTrue(settings.moduleShowsMenuBarItem(id: ModuleCatalog.stats.id))
+    }
+
     func testModuleHotkeyFallsBackToDefaultThenPersists() {
         let fallback = HotkeyPreset.custom(keyCode: 45, modifiers: [.control, .option])
         XCTAssertEqual(

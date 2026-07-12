@@ -412,6 +412,17 @@ private struct ModuleCard: View {
                             isOn: Binding(
                                 get: { registry.isEnabled(id: info.id) },
                                 set: { registry.setEnabled($0, id: info.id) }))
+                        if info.ownsMenuBarItem {
+                            toggleColumn(
+                                label: "MENU",
+                                isOn: Binding(
+                                    get: { registry.showsMenuBarItem(id: info.id) },
+                                    set: { registry.setShowsMenuBarItem($0, id: info.id) }))
+                                // Stays live while the tool is off so the choice can be
+                                // pre-set; dimmed because it changes nothing until then.
+                                .opacity(enabled ? 1 : 0.4)
+                                .help("Show \(info.displayName) in the menu bar")
+                        }
                     }
                     if showsOpenButton {
                         // One click: enabling on demand means Open always works.

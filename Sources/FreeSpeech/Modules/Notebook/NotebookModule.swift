@@ -314,11 +314,11 @@ final class NotebookPanelController {
 
     func hide() {
         model.flushPendingSave()
-        panel?.orderOut(nil)
+        if let panel { DSMotionAppKit.dismissWindow(panel, close: false) }
     }
 
     private func focus() {
-        panel?.makeKeyAndOrderFront(nil)
+        if let panel { DSMotionAppKit.presentWindow(panel) }
         NSApp.activate(ignoringOtherApps: true)
         model.focusEditor()
     }
@@ -542,6 +542,9 @@ struct NotebookView: View {
                     toolbar(width: geo.size.width)
                 }
                 .frame(height: 40)
+                // The accent gradient lives on the top toolbar bar only, not behind
+                // the title or body (which stay plain ink0).
+                .background(AppearanceBackground())
                 Rectangle().fill(Color.dsLine).frame(height: 1)
                 TextField("Untitled", text: $model.editedTitle)
                     .textFieldStyle(.plain)
@@ -553,7 +556,7 @@ struct NotebookView: View {
                 RichTextEditor(model: model, proxy: editor)
             }
         }
-        .background(AppearanceBackground())
+        .background(Color.dsInk0)
         .frame(minWidth: 480, minHeight: 340)
         .animation(DS.animBase, value: config.sidebarVisible)
         .onChange(of: config.sortOrder) { _, _ in model.refresh() }

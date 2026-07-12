@@ -35,6 +35,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         registry.register(AppCleanerModule(settings: settings))
         registry.register(BoringNotchModule(registry: registry))
         registry.register(ClopModule(settings: settings, hub: eventHub))
+        registry.register(ShelfModule(settings: settings))
         for info in [ModuleCatalog.cotypist, ModuleCatalog.linearMouse] {
             registry.register(PlaceholderModule(info: info))
         }

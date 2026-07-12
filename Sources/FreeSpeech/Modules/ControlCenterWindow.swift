@@ -87,8 +87,10 @@ struct ControlCenterView: View {
                             title: section.rawValue,
                             selected: selectedSection == section
                         ) {
-                            selectedSection = section
-                            expandedID = nil
+                            withAnimation(DS.animCrossfade) {
+                                selectedSection = section
+                                expandedID = nil
+                            }
                         }
                     }
                     Spacer()
@@ -97,13 +99,15 @@ struct ControlCenterView: View {
             }
             if selectedSection == .appearance {
                 AppearancePane()
+                    .transition(.dsCrossfade)
             } else {
                 ScrollView {
                     LazyVStack(spacing: appearance.density.contentSpacing) {
-                        ForEach(visibleModules) { info in
+                        ForEach(Array(visibleModules.enumerated()), id: \.element.id) { index, info in
                             ModuleCard(
                                 registry: registry,
                                 info: info,
+                                index: index,
                                 expanded: expandedID == info.id,
                                 showsOpenButton: selectedSection == .apps,
                                 onToggleExpanded: {
@@ -115,6 +119,7 @@ struct ControlCenterView: View {
                     }
                     .padding(.bottom, 12)
                 }
+                .transition(.dsCrossfade)
             }
             SuitePrefsFooter()
         }
@@ -356,10 +361,12 @@ private struct ModuleCard: View {
     @ObservedObject var registry: ModuleRegistry
     @ObservedObject private var appearance = AppearanceManager.shared
     let info: ModuleInfo
+    var index: Int = 0
     let expanded: Bool
     var showsOpenButton = false
     let onToggleExpanded: () -> Void
     @State private var hovering = false
+    @State private var appeared = false
 
     private var comingSoon: Bool { info.status == .comingSoon }
     private var enabled: Bool { registry.isEnabled(id: info.id) }
@@ -371,6 +378,8 @@ private struct ModuleCard: View {
                     .font(.system(size: 16, weight: .medium))
                     .foregroundStyle(
                         comingSoon ? Color.dsFaint : (enabled ? Color.dsAccent : Color.dsMuted))
+                    .animation(DS.animBase, value: enabled)
+                    .dsLivePulse(enabled && !comingSoon)
                     .frame(width: 38, height: 38)
                     .background(
                         Color.dsInk2,
@@ -421,6 +430,7 @@ private struct ModuleCard: View {
                                 // Stays live while the tool is off so the choice can be
                                 // pre-set; dimmed because it changes nothing until then.
                                 .opacity(enabled ? 1 : 0.4)
+                                .animation(DS.animBase, value: enabled)
                                 .help("Show \(info.displayName) in the menu bar")
                         }
                     }
@@ -449,7 +459,7 @@ private struct ModuleCard: View {
                                     hovering ? Color(nsColor: DS.controlHover) : Color.clear,
                                     in: Circle())
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(.dsPress)
                         .help("Open \(info.displayName) settings")
                     case .inline:
                         Button {
@@ -464,7 +474,7 @@ private struct ModuleCard: View {
                                     hovering ? Color(nsColor: DS.controlHover) : Color.clear,
                                     in: Circle())
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(.dsPress)
                     default:
                         EmptyView()
                     }
@@ -493,6 +503,11 @@ private struct ModuleCard: View {
         .opacity(comingSoon ? 0.55 : 1)
         .shadow(color: cardShadowColor, radius: cardShadowRadius, y: cardShadowY)
         .onHover { hovering = $0 }
+        .animation(DS.animInstant, value: hovering)
+        // Quiet staggered entrance so the grid settles in on open, not all at once.
+        .opacity(appeared ? 1 : 0)
+        .offset(y: appeared ? 0 : 5)
+        .onAppear { withAnimation(DS.animAppear(index: index)) { appeared = true } }
     }
 
     private func toggleColumn(label: String, isOn: Binding<Bool>) -> some View {

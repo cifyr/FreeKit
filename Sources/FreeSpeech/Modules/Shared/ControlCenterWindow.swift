@@ -96,7 +96,10 @@ final class ControlCenterWindowController {
             let target = NSSize(
                 width: min(max(ideal.width + 64, window.minSize.width), screen.width),
                 height: min(max(ideal.height + 64, window.minSize.height), screen.height))
-            DSMotionAppKit.resizeWindow(window, toContentSize: target)
+            // Matched to the card's expand spring so frame and content settle
+            // together; the close path keeps the quicker default since the
+            // popup is already fading out over it.
+            DSMotionAppKit.resizeWindowMatchingExpand(window, toContentSize: target)
         } else if let restore = preSettingsFrame {
             DSMotionAppKit.resizeWindow(window, toFrame: restore)
             preSettingsFrame = nil
@@ -686,7 +689,6 @@ private struct ModuleCard: View {
                     .foregroundStyle(
                         comingSoon ? Color.dsFaint : (enabled ? Color.dsAccent : Color.dsMuted))
                     .animation(DS.animBase, value: enabled)
-                    .dsLivePulse(enabled && !comingSoon)
                     .frame(width: 38, height: 38)
                     .background(
                         Color.dsInk2,

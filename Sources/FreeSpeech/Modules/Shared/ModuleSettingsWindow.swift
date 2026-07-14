@@ -25,8 +25,11 @@ struct DSSettingsCard<Content: View>: View {
         .padding(appearance.density.cardPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            Color.dsInk1,
-            in: RoundedRectangle(cornerRadius: DS.radiusControl, style: .continuous))
+            ZStack {
+                Color.dsInk1
+                DSGrainOverlay(opacity: 0.1)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: DS.radiusControl, style: .continuous)))
         .overlay(
             RoundedRectangle(cornerRadius: DS.radiusControl, style: .continuous)
                 .strokeBorder(Color.dsLine, lineWidth: 1))
@@ -72,8 +75,7 @@ struct DSToggleRow: View {
     @Binding var isOn: Bool
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
-            DSCheckbox(isOn: $isOn)
+        HStack(alignment: .center, spacing: 10) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
                     .font(.system(size: 13, weight: .semibold))
@@ -86,6 +88,7 @@ struct DSToggleRow: View {
                 }
             }
             Spacer(minLength: 0)
+            DSToggle(isOn: $isOn)
         }
         .contentShape(Rectangle())
         .dsHoverHighlight(cornerRadius: DS.radiusKeycap)

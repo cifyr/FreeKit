@@ -510,13 +510,15 @@ final class AmphetamineModule: NSObject, AppModule {
         let image = NSImage(
             systemSymbolName: info.symbolName,
             accessibilityDescription: isSessionActive ? "Amphetamine awake" : "Amphetamine idle")
-        // Always tint (never nil): a template glyph with no tint falls back to
-        // the menu bar label color, which is black on a light menu bar. Grey at
-        // rest, accent while a session holds the Mac awake. isTemplate is
-        // required or contentTintColor is ignored.
         image?.isTemplate = true
         button.image = image
-        button.contentTintColor = isSessionActive ? DS.accent : DS.muted
+        // nil at rest inherits the system's default template color — the
+        // same one every other menu-bar icon in the suite uses, since none
+        // of them override contentTintColor either. A fixed gray tint here
+        // was the one icon in the menu bar that didn't match its neighbors.
+        // Accent only while a session actually holds the Mac awake, the
+        // suite's one "this is live" signal.
+        button.contentTintColor = isSessionActive ? DS.accent : nil
         let title: String
         if let plan = activePlan {
             title = " " + AmphetaminePlan.countdownText(

@@ -29,7 +29,6 @@ let package = Package(
                 "Modules/Stats/README.md",
                 "Modules/HyperKey/README.md",
                 "Modules/Amphetamine/README.md",
-                "Modules/Devices/README.md",
             ],
             linkerSettings: [
                 .linkedFramework("AppKit"),

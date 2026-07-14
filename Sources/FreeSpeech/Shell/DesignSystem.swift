@@ -91,8 +91,9 @@ struct PrimaryButtonStyle: ButtonStyle {
     }
 }
 
-// Minimal boolean toggle: 18x18, dark in both states, the paper check is the
-// only bright mark. Quieter than a switch; accent stays reserved for live voice.
+// Minimal boolean toggle: 18x18. Red is reserved for live and for what is
+// on, so the on-state fills accent (with the paper checkmark on top) instead
+// of staying inside the ink neutrals.
 struct DSCheckbox: View {
     @Binding var isOn: Bool
     @State private var hovering = false
@@ -103,9 +104,9 @@ struct DSCheckbox: View {
         } label: {
             ZStack {
                 RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    .fill(isOn ? Color.dsInk3 : (hovering ? Color.dsInk3 : Color.dsInk2))
+                    .fill(isOn ? Color.dsAccent : (hovering ? Color.dsInk3 : Color.dsInk2))
                 RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    .strokeBorder(Color.dsLine, lineWidth: 1)
+                    .strokeBorder(isOn ? Color.clear : Color.dsLine, lineWidth: 1)
                 if isOn {
                     Image(systemName: "checkmark")
                         .font(.system(size: 10, weight: .bold))
@@ -121,7 +122,8 @@ struct DSCheckbox: View {
 }
 
 // Capsule chip for short one-of-many choices; hover fills ink3 at durInstant,
-// selection is the accent-60 border + accent text.
+// selection is a solid accent fill with a soft glow (red is reserved for
+// live and for what is on) rather than just an accent-bordered outline.
 struct DSChip: View {
     let title: String
     let selected: Bool
@@ -132,20 +134,157 @@ struct DSChip: View {
         Button(action: action) {
             Text(title)
                 .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(selected ? Color.dsAccent : Color.dsPaper)
+                .foregroundStyle(Color.dsPaper)
                 .lineLimit(1)
                 .minimumScaleFactor(0.85)
                 .padding(.horizontal, 14)
                 .frame(maxWidth: .infinity)
                 .frame(height: 32)
-                .background(hovering && !selected ? Color.dsInk3 : Color.dsInk2, in: Capsule())
-                .overlay(Capsule().strokeBorder(
-                    selected ? Color.dsAccent.opacity(0.6) : Color.dsLine, lineWidth: 1))
+                .background(
+                    selected ? Color.dsAccent : (hovering ? Color.dsInk3 : Color.dsInk2),
+                    in: Capsule())
+                .overlay(Capsule().strokeBorder(selected ? Color.clear : Color.dsLine, lineWidth: 1))
+                .shadow(color: selected ? Color.dsAccent.opacity(0.32) : .clear, radius: 10)
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .animation(DS.animInstant, value: hovering)
         .animation(DS.animInstant, value: selected)
+    }
+}
+
+// Capsule pill switch (iOS-style) for boolean rows inside settings panes —
+// distinct from DSCheckbox's compact square, used where a full switch reads
+// more naturally. Thumb slides with a critically-damped spring.
+struct DSToggle: View {
+    @Binding var isOn: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    // Ported straight from the dedicated Toggle/Slider reference's SVG,
+    // which (unlike the general theme file) displays its 56x30 viewBox at
+    // 1:1 — no downscale to account for this time. A 56x30 canvas centers a
+    // 50x16 rx8 track automatically (ZStack's default center alignment
+    // gives the same 3pt/7pt inset the SVG hand-sets), and the 20-diameter
+    // thumb's on/off centers (41/15) are the reference's own hand-placed
+    // knobCx values, not derived from the track math — .position() places
+    // it exactly rather than approximating via padding.
+    private let width: CGFloat = 56
+    private let height: CGFloat = 30
+    private let trackWidth: CGFloat = 50
+    private let trackHeight: CGFloat = 16
+    private let thumbDiameter: CGFloat = 20
+    private let knobOffX: CGFloat = 15
+    private let knobOnX: CGFloat = 41
+    private let knobY: CGFloat = 15
+
+    var body: some View {
+        Button {
+            isOn.toggle()
+        } label: {
+            ZStack {
+                Capsule()
+                    .fill(isOn ? Color.dsAccent : Color.dsInk3)
+                    .frame(width: trackWidth, height: trackHeight)
+                Circle()
+                    .fill(Color.dsPaper)
+                    .frame(width: thumbDiameter, height: thumbDiameter)
+                    .shadow(color: .black.opacity(0.35), radius: 2, y: 1)
+                    // Approximates the reference's feGaussianBlur+feColorMatrix
+                    // "goo" halo (a blurred red blob merging into the thumb) as a
+                    // plain accent glow — the true blur+contrast technique was
+                    // tried once already and looked "terrible" (contrast shifts
+                    // color, not just alpha, so it hazed rather than merged).
+                    .shadow(color: .dsAccent.opacity(isOn ? 0.55 : 0), radius: 6)
+                    .position(x: isOn ? knobOnX : knobOffX, y: knobY)
+            }
+            .frame(width: width, height: height)
+        }
+        .buttonStyle(.plain)
+        .animation(DS.anim(DS.durBase, reduceMotion: reduceMotion), value: isOn)
+    }
+}
+
+// Small keycap-style card: an icon slot over a micro-label, dark fill with a
+// drop shadow and an inset top highlight so it reads as a raised physical
+// key. First use is HyperKey's Caps Lock graphic.
+struct DSKeycap<Icon: View>: View {
+    let label: String
+    @ViewBuilder let icon: Icon
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            icon
+            Spacer(minLength: 0)
+            Text(label)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Color.dsMuted)
+        }
+        .padding(11)
+        .frame(width: 96, height: 60, alignment: .topLeading)
+        .background(Color.dsInk2, in: RoundedRectangle(cornerRadius: DS.radiusControl, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: DS.radiusControl, style: .continuous)
+                .strokeBorder(Color.white.opacity(0.06), lineWidth: 1))
+        .shadow(color: .black.opacity(0.5), radius: 0, x: 0, y: 2)
+    }
+}
+
+// Thick accent-fill track with a glowing paper thumb, replacing the native
+// Slider's thin system track — this is the reference's most visible custom
+// control, so it gets a fully custom drag surface rather than a `.tint()`.
+struct DSSlider: View {
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+    @State private var dragging = false
+
+    // Reference measures an 8pt track with a 14-diameter thumb circle (r=7).
+    private let trackHeight: CGFloat = 8
+    private let thumbDiameter: CGFloat = 14
+    // The reference's fill gradient ("fkred") runs from a dark red stop to
+    // the flat accent, not accent-at-reduced-opacity — a real second color,
+    // not a fade of the same one.
+    private let fillStart = Color(red: 0x7C / 255, green: 0x26 / 255, blue: 0x20 / 255)
+
+    var body: some View {
+        GeometryReader { geo in
+            let width = max(geo.size.width, 1)
+            let thumbX = fraction(in: width) * width
+            ZStack(alignment: .leading) {
+                Capsule().fill(Color.dsInk2).frame(height: trackHeight)
+                Capsule()
+                    .fill(LinearGradient(
+                        colors: [fillStart, Color.dsAccent],
+                        startPoint: .leading, endPoint: .trailing))
+                    .frame(width: max(thumbDiameter / 2, thumbX), height: trackHeight)
+                Circle()
+                    .fill(Color.dsPaper)
+                    .frame(width: thumbDiameter, height: thumbDiameter)
+                    .shadow(color: .black.opacity(0.35), radius: 2, y: 1)
+                    // Same accent-glow approximation of the reference's blurred
+                    // "gel" halo around the thumb as DSToggle uses.
+                    .shadow(color: .dsAccent.opacity(dragging ? 0.55 : 0.4), radius: dragging ? 8 : 5)
+                    .scaleEffect(dragging ? 1.12 : 1)
+                    .offset(x: thumbX - thumbDiameter / 2)
+            }
+            .frame(height: thumbDiameter + 8)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { g in
+                        dragging = true
+                        let clamped = min(max(g.location.x, 0), width)
+                        value = range.lowerBound + Double(clamped / width) * (range.upperBound - range.lowerBound)
+                    }
+                    .onEnded { _ in dragging = false })
+        }
+        .frame(height: thumbDiameter + 8)
+        .animation(DS.animInstant, value: dragging)
+        .dsNoWindowDrag()
+    }
+
+    private func fraction(in width: CGFloat) -> CGFloat {
+        guard range.upperBound > range.lowerBound else { return 0 }
+        return CGFloat((value - range.lowerBound) / (range.upperBound - range.lowerBound))
     }
 }
 
@@ -164,7 +303,11 @@ struct DSTabButton: View {
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(selected ? Color.dsPaper : (hovering ? Color.dsPaper : Color.dsMuted))
                 Rectangle()
-                    .fill(selected ? Color.dsAccent : Color.clear)
+                    .fill(selected
+                        ? AnyShapeStyle(LinearGradient(
+                            colors: [.clear, .dsAccent, .dsAccent, .clear],
+                            startPoint: .leading, endPoint: .trailing))
+                        : AnyShapeStyle(Color.clear))
                     .frame(height: 2)
             }
             .fixedSize(horizontal: true, vertical: false)
@@ -311,6 +454,44 @@ extension View {
     func dsNoWindowDrag() -> some View {
         background(DSWindowDragBlocker())
     }
+    // Soft top/bottom fade for a scrolling pane instead of a hard clip, so
+    // content reads as continuing past the edge rather than truncating
+    // mid-line. Applied to the ScrollView itself (its viewport size is
+    // stable) rather than its content (which grows with scroll length), so
+    // the fade band stays a consistent proportion regardless of content.
+    // Only masks when the content actually overflows the viewport — a pane
+    // short enough to show everything has nothing being cut off, so fading
+    // its edges just dims real content for no reason.
+    func dsScrollEdgeFade() -> some View {
+        modifier(DSScrollEdgeFade())
+    }
+}
+
+private struct DSScrollEdgeFade: ViewModifier {
+    @State private var overflowing = false
+
+    func body(content: Content) -> some View {
+        content
+            .onScrollGeometryChange(for: Bool.self) { geometry in
+                geometry.contentSize.height > geometry.containerSize.height + 1
+            } action: { _, newValue in
+                overflowing = newValue
+            }
+            .mask(
+                LinearGradient(
+                    stops: overflowing
+                        ? [
+                            .init(color: .clear, location: 0),
+                            .init(color: .black, location: 0.04),
+                            .init(color: .black, location: 0.96),
+                            .init(color: .clear, location: 1),
+                        ]
+                        : [
+                            .init(color: .black, location: 0),
+                            .init(color: .black, location: 1),
+                        ],
+                    startPoint: .top, endPoint: .bottom))
+    }
 }
 
 // Historical belt-and-suspenders: with isMovableByWindowBackground now off on
@@ -434,6 +615,59 @@ enum DSMotionAppKit {
         }
         return frame
     }
+}
+
+// Native equivalent of the reference design's SVG feTurbulence grain: a
+// small pre-rendered noise tile, generated once and reused, tiled across the
+// view and blended at low opacity so it reads as film grain over the wash
+// gradient rather than redrawing noise every frame.
+struct DSGrainOverlay: View {
+    // The reference runs this layer at 0.26-0.5, but at native window scale
+    // (not a shrunk marketing mockup) that read as too heavy in practice —
+    // toned down while keeping it clearly visible rather than a hint.
+    var opacity: Double = 0.16
+
+    var body: some View {
+        Image(nsImage: Self.tile)
+            .resizable(resizingMode: .tile)
+            // Without this, the tile gets bilinear-smoothed at render scale,
+            // which blurs sharp per-pixel randomness into soft blobby shapes
+            // that read as a repeating printed pattern instead of grain —
+            // nearest-neighbor sampling keeps every pixel a crisp, distinct
+            // random value the way film grain actually looks.
+            .interpolation(.none)
+            .blendMode(.overlay)
+            .opacity(opacity)
+            .allowsHitTesting(false)
+    }
+
+    // Internal (not private) so custom Shapes that can't host a plain View
+    // background — anything that overflows its own nominal frame, like the
+    // settings card's corner blob — can fill themselves with this tile via
+    // ImagePaint directly instead.
+    static let tile: NSImage = {
+        // Large enough that a full window's worth of grain doesn't visibly
+        // repeat the same random draw — a small tile technically is random
+        // per pixel, but human vision is very good at spotting the exact
+        // same "random" pattern recurring every N points.
+        let size = 256
+        guard let bitmap = NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: size, pixelsHigh: size,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0),
+            let data = bitmap.bitmapData
+        else { return NSImage(size: NSSize(width: size, height: size)) }
+        for i in 0..<(size * size) {
+            let v = UInt8.random(in: 0...255)
+            data[i * 4] = v
+            data[i * 4 + 1] = v
+            data[i * 4 + 2] = v
+            data[i * 4 + 3] = 255
+        }
+        let image = NSImage(size: NSSize(width: size, height: size))
+        image.addRepresentation(bitmap)
+        return image
+    }()
 }
 
 extension Color {

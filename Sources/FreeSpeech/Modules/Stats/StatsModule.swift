@@ -736,6 +736,34 @@ private struct StatsSettingsPane: View {
             }
         }
 
+        if !preview.bluetooth.isEmpty {
+            DSSettingsCard(title: "Bluetooth battery") {
+                VStack(alignment: .leading, spacing: 11) {
+                    ForEach(preview.bluetooth, id: \.name) { device in
+                        HStack(spacing: 10) {
+                            Text(device.name)
+                                .font(.system(size: 12.5))
+                                .foregroundStyle(Color.dsMuted)
+                                .lineLimit(1)
+                            Spacer(minLength: 8)
+                            GeometryReader { geo in
+                                ZStack(alignment: .leading) {
+                                    Capsule().fill(Color.white.opacity(0.07))
+                                    Capsule().fill(Color.dsMuted)
+                                        .frame(width: geo.size.width * CGFloat(device.percent) / 100)
+                                }
+                            }
+                            .frame(width: 64, height: 5)
+                            Text("\(device.percent)%")
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundStyle(Color.dsPaper)
+                                .frame(width: 34, alignment: .trailing)
+                        }
+                    }
+                }
+            }
+        }
+
         DSSettingsCard(title: "Refresh") {
             HStack(spacing: 8) {
                 ForEach([0.5, 1.0, 2.0, 5.0], id: \.self) { value in
@@ -885,12 +913,19 @@ private struct StatsDropdownSection: View {
                     settings.setModuleBool($0, id: moduleID, key: kind.showKey)
                 }))
             if inMenu {
-                HStack(spacing: 14) {
+                VStack(alignment: .leading, spacing: 8) {
                     Text("Rows")
                         .font(.system(size: 11))
                         .foregroundStyle(Color.dsFaint)
-                    ForEach(kind.rows, id: \.id) { row in rowCheckbox(row) }
-                    Spacer()
+                    // A single HStack forced every label to compress into
+                    // whatever width was left in a narrow grid column,
+                    // wrapping "Read/write" onto three lines one word at a
+                    // time. A wrapping grid instead lets each row keep its
+                    // natural width and flow onto a new line as a whole unit.
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 80), spacing: 12)],
+                              alignment: .leading, spacing: 8) {
+                        ForEach(kind.rows, id: \.id) { row in rowCheckbox(row) }
+                    }
                 }
             }
         }
@@ -901,7 +936,7 @@ private struct StatsDropdownSection: View {
             DSCheckbox(isOn: Binding(
                 get: { settings.moduleBool(id: moduleID, key: kind.rowKey(row.id)) ?? true },
                 set: { settings.setModuleBool($0, id: moduleID, key: kind.rowKey(row.id)) }))
-            Text(row.name).font(.system(size: 11)).foregroundStyle(Color.dsPaper)
+            Text(row.name).font(.system(size: 11)).foregroundStyle(Color.dsPaper).fixedSize()
         }
     }
 

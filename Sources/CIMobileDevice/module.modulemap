@@ -1,0 +1,4 @@
+module CIMobileDevice {
+    header "include/imobiledevice_shim.h"
+    export *
+}

@@ -3,9 +3,11 @@ import SwiftUI
 import IOKit
 import FreeSpeechCore
 
-// Devices: menu bar battery readout for paired Bluetooth accessories.
-// Clicking the status item shows a popup that dismisses on any outside
-// click; no hotkey, no settings pane (nothing here needs configuring).
+// Devices: menu bar battery readout for paired Bluetooth accessories, plus
+// iPhone/iPad/Apple Watch battery for anything already trust-paired over USB
+// or WiFi sync (see IDeviceBatteryReader.swift). Clicking the status item
+// shows a popup that dismisses on any outside click; no hotkey, no settings
+// pane (nothing here needs configuring).
 final class DevicesModule: NSObject, AppModule {
     let info = ModuleCatalog.devices
 
@@ -17,7 +19,9 @@ final class DevicesModule: NSObject, AppModule {
     override init() {
         panelController = DevicesPanelController()
         super.init()
-        panelController.onRefresh = { [weak self] in self?.refreshGlyph() }
+        panelController.onRefresh = { [weak self] in
+            self?.refreshGlyph(batteries: self?.panelController.store.batteries)
+        }
     }
 
     func activate() {
@@ -53,7 +57,10 @@ final class DevicesModule: NSObject, AppModule {
             statusItem = item
         }
         statusItem?.isVisible = true
-        refreshGlyph()
+        // Bluetooth-only fast scan for the initial glyph — no reason to block
+        // activation on a lockdownd/companion_proxy network round trip; the merged
+        // (Bluetooth + iPhone/iPad/Watch) result lands once the panel is opened.
+        refreshGlyph(batteries: nil)
     }
 
     @objc private func statusItemTapped() {
@@ -65,19 +72,18 @@ final class DevicesModule: NSObject, AppModule {
         }
     }
 
-    private func refreshGlyph() {
+    private func refreshGlyph(batteries: [DeviceBattery]?) {
         guard let button = statusItem?.button else { return }
-        let batteries = DevicesBatteryReader.read()
+        let list = batteries ?? DevicesBatteryReader.read()
         button.image = NSImage(
-            systemSymbolName: DevicesPlan.statusItemSymbolName(for: batteries),
+            systemSymbolName: DevicesPlan.statusItemSymbolName(for: list),
             accessibilityDescription: "Devices")
     }
 }
 
 // IOKit scan for HID-over-Bluetooth accessory batteries (AirPods, Magic
-// Mouse/Keyboard/Trackpad, and similar). There is no public API for other
-// iCloud devices' battery (iPhone/iPad/Watch continuity) — only what shows
-// up here.
+// Mouse/Keyboard/Trackpad, and similar). iPhone/iPad/Watch battery is a
+// separate path — see IDeviceBatteryReader.swift.
 enum DevicesBatteryReader {
     static func read() -> [DeviceBattery] {
         var results: [DeviceBattery] = []

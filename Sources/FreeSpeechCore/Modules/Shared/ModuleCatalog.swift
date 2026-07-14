@@ -70,13 +70,13 @@ public enum ModuleCatalog {
         summary: "Menu bar manager: hide and show other apps' menu bar icons, and FreeKit's own.",
         symbolName: "snowflake", status: .comingSoon, ownsMenuBarItem: true)
 
-    // Bluetooth-only: there is no public API for other iCloud devices'
-    // (iPhone/iPad/Watch) battery, so this covers paired accessories that
-    // publish BatteryPercent over HID-over-Bluetooth (AirPods, Magic
-    // Mouse/Keyboard/Trackpad, and similar).
+    // Bluetooth accessories via HID-over-Bluetooth (AirPods, Magic
+    // Mouse/Keyboard/Trackpad); iPhone/iPad/Watch via libimobiledevice against
+    // a device already trust-paired over USB or WiFi sync — see
+    // Sources/FreeSpeech/Modules/Devices/IDeviceBatteryReader.swift.
     public static let devices = ModuleInfo(
         id: "devices", displayName: "Devices",
-        summary: "Battery level for paired AirPods, Magic Mouse/Keyboard/Trackpad, and other Bluetooth accessories.",
+        summary: "Battery level for AirPods, Magic accessories, and paired iPhone, iPad, and Apple Watch.",
         symbolName: "battery.100percent", status: .available, ownsMenuBarItem: true)
 
     public static let cotypist = ModuleInfo(

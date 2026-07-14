@@ -576,5 +576,11 @@
 	<string>FreeKit records from your microphone only while the Speech hotkey is active, and transcribes entirely on this Mac. Audio never leaves the machine.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>FreeKit shows a live camera preview only while you have the notch's Mirror mode open, so you can check how you look before a call. Nothing is recorded or leaves the machine.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>FreeKit looks for your iPhone, iPad, and Apple Watch on your local network to show their battery level in the Devices module.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_apple-mobdev2._tcp.</string>
+	</array>
 </dict>
 </plist>

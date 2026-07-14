@@ -4,9 +4,26 @@ import FreeSpeechCore
 
 final class DevicesStore: ObservableObject {
     @Published private(set) var batteries: [DeviceBattery] = []
+    private var isRefreshing = false
 
-    func refresh() {
-        batteries = DevicesBatteryReader.read()
+    // Bluetooth (IOKit) is a fast synchronous scan, shown immediately; iPhone/iPad/Watch
+    // battery goes through lockdownd/companion_proxy over the network, which can take a
+    // few seconds per device, so it runs off the main thread and merges in once done
+    // rather than blocking the panel's first paint. `onUpdate` fires after each of the
+    // two stages so callers (the status item glyph) stay in sync with both.
+    func refresh(onUpdate: @escaping () -> Void = {}) {
+        batteries = DevicesPlan.sorted(DevicesBatteryReader.read())
+        onUpdate()
+        guard !isRefreshing else { return }
+        isRefreshing = true
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let merged = DevicesPlan.sorted(DevicesBatteryReader.read() + IDeviceBatteryReader.read())
+            DispatchQueue.main.async {
+                self?.batteries = merged
+                self?.isRefreshing = false
+                onUpdate()
+            }
+        }
     }
 }
 
@@ -30,8 +47,7 @@ final class DevicesPanelController {
     func show(belowStatusItemButton button: NSStatusBarButton) {
         if panel == nil { panel = makePanel() }
         guard let panel, let buttonWindow = button.window else { return }
-        store.refresh()
-        onRefresh?()
+        store.refresh(onUpdate: { [weak self] in self?.onRefresh?() })
 
         let buttonFrame = buttonWindow.frame
         var origin = NSPoint(
@@ -67,8 +83,7 @@ final class DevicesPanelController {
     private func startRefreshTimer() {
         stopRefreshTimer()
         refreshTimer = Timer.scheduledTimer(withTimeInterval: Self.refreshInterval, repeats: true) { [weak self] _ in
-            self?.store.refresh()
-            self?.onRefresh?()
+            self?.store.refresh(onUpdate: { [weak self] in self?.onRefresh?() })
         }
     }
 
@@ -147,7 +162,7 @@ private struct DevicesPanelView: View {
                     Text("No paired devices found")
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(Color.dsPaper)
-                    Text("AirPods and Magic accessories show up here once paired over Bluetooth.")
+                    Text("AirPods and Magic accessories show up here once paired over Bluetooth; iPhone, iPad, and Apple Watch show up once trust-paired over USB or WiFi sync.")
                         .font(.system(size: 10))
                         .foregroundStyle(Color.dsFaint)
                         .multilineTextAlignment(.center)

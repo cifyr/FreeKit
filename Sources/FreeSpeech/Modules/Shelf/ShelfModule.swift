@@ -4,9 +4,10 @@ import FreeSpeechCore
 
 // Shelf: wiggle a drag side to side and a floating shelf pops up under the
 // cursor; park files there, drag them back out anywhere, close with the X.
-// No menu bar presence: the shake gesture is the whole interface. The shake
+// The shake gesture is the primary way in; the optional menu bar icon is a
+// way to reopen a shelf that still has items on it, or clear it. The shake
 // math lives in Core's ShelfPlan.
-final class ShelfModule: NSObject, AppModule {
+final class ShelfModule: NSObject, AppModule, NSMenuDelegate {
     let info = ModuleCatalog.shelf
 
     private let settings: Settings
@@ -14,6 +15,7 @@ final class ShelfModule: NSObject, AppModule {
     private var detector: ShakeDetector
     private var dragSessionActive = false
     private var lastDragChangeCount = 0
+    private var statusItem: NSStatusItem?
     private let panelController: ShelfPanelController
     private let paneModel = ShelfPaneModel()
 
@@ -68,7 +70,23 @@ final class ShelfModule: NSObject, AppModule {
         Log.info("shelf: deactivated")
     }
 
-    func setMenuBarItemVisible(_ visible: Bool) {}
+    func setMenuBarItemVisible(_ visible: Bool) {
+        if visible {
+            if statusItem == nil {
+                let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+                item.button?.image = NSImage(
+                    systemSymbolName: info.symbolName, accessibilityDescription: "Shelf")
+                item.button?.toolTip = "Shelf"
+                let menu = NSMenu()
+                menu.delegate = self
+                item.menu = menu
+                statusItem = item
+            }
+            statusItem?.isVisible = true
+        } else {
+            statusItem?.isVisible = false
+        }
+    }
 
     var settingsPopupSize: NSSize { NSSize(width: 560, height: 480) }
 
@@ -121,6 +139,47 @@ final class ShelfModule: NSObject, AppModule {
     }
 
     var itemCount: Int { panelController.store.items.count }
+
+    // MARK: - Menu
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        menu.removeAllItems()
+        let count = itemCount
+        let show = NSMenuItem(
+            title: count > 0 ? "Show Shelf (\(count))" : "Show Shelf",
+            action: #selector(showShelfFromMenu), keyEquivalent: "")
+        show.target = self
+        menu.addItem(show)
+
+        if count > 0 {
+            let clear = NSMenuItem(title: "Clear Shelf", action: #selector(clearShelfFromMenu), keyEquivalent: "")
+            clear.target = self
+            menu.addItem(clear)
+        }
+
+        menu.addItem(.separator())
+        let settingsItem = NSMenuItem(
+            title: "Shelf Settings\u{2026}", action: #selector(openSettingsFromMenu), keyEquivalent: "")
+        settingsItem.target = self
+        menu.addItem(settingsItem)
+    }
+
+    @objc private func showShelfFromMenu() {
+        guard let button = statusItem?.button, let window = button.window else {
+            showShelf(near: NSEvent.mouseLocation)
+            return
+        }
+        let screenFrame = window.convertToScreen(button.convert(button.bounds, to: nil))
+        showShelf(near: NSPoint(x: screenFrame.midX, y: screenFrame.minY))
+    }
+
+    @objc private func clearShelfFromMenu() {
+        clearShelf()
+    }
+
+    @objc private func openSettingsFromMenu() {
+        openSettings()
+    }
 }
 
 // MARK: - Settings pane

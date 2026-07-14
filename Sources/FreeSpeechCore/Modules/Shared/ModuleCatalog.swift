@@ -99,8 +99,6 @@ public enum ModuleCatalog {
         summary: "Keep the Mac awake: timer tiers from the menu bar, or right-click to stay awake until you say stop.",
         symbolName: "pills", status: .available, ownsMenuBarItem: true)
 
-    // ownsMenuBarItem is false: there is no user-facing toggle for the menu
-    // bar icon anymore, it just self-manages, showing whenever Clop is on.
     public static let clop = ModuleInfo(
         id: "clop", displayName: "Clop",
         summary: "Automatic image, video, and PDF compression on copy.",
@@ -116,11 +114,12 @@ public enum ModuleCatalog {
         summary: "Drag-and-drop file conversion between image, audio, video, and document formats, done on-device.",
         symbolName: "arrow.triangle.2.circlepath", status: .available, ownsMenuBarItem: true)
 
-    // The shelf is summoned by the shake gesture, not from the menu bar.
+    // The shake gesture is the primary way in, but the icon is a handy way to
+    // reopen a shelf that still has items parked on it, or to clear it.
     public static let shelf = ModuleInfo(
         id: "shelf", displayName: "Shelf",
         summary: "Wiggle a drag to park files on a floating shelf, then drop them anywhere.",
-        symbolName: "tray.and.arrow.down", status: .available, ownsMenuBarItem: false)
+        symbolName: "tray.and.arrow.down", status: .available, ownsMenuBarItem: true)
 
     // Notch widget lives in the notch, so it never gets a menu bar item.
     public static let boringNotch = ModuleInfo(

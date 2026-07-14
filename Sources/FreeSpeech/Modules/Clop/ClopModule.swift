@@ -137,7 +137,6 @@ final class ClopModule: NSObject, AppModule, NSMenuDelegate {
         stopPolling()
         dropZoneCoordinator.setClopActive(false)
         cancelAllWork()
-        setMenuBarItemVisible(false)
         if let hotkeyToken { hub.unregister(hotkeyToken) }
         hotkeyToken = nil
         if let finderHotkeyToken { hub.unregister(finderHotkeyToken) }

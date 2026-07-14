@@ -1,6 +1,6 @@
 # Installing FreeKit
 
-FreeSpeech is a local voice-dictation app for macOS. Everything runs on your Mac — nothing is sent to the cloud.
+FreeKit is a local-first menu bar utility suite for macOS. Everything runs on your Mac — nothing is sent to the cloud.
 
 ## Requirements
 
@@ -35,7 +35,7 @@ If your Mac is Intel-based or on an older macOS, it will not run.
   and press Return.
 - **"App is damaged / can't be opened":** the quarantine flag wasn't cleared. Open Terminal and run:
   `xattr -dr com.apple.quarantine /Applications/FreeKit.app`
-- **Dictation inserts nothing:** make sure **Accessibility** is enabled for FreeSpeech in
+- **Dictation inserts nothing:** make sure **Accessibility** is enabled for FreeKit in
   System Settings → Privacy & Security → Accessibility.
 - **Transcription is inaccurate:** check your input device and model in Settings. The recommended
   model ("Turbo (compact)") gives the best accuracy.

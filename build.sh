@@ -11,7 +11,7 @@ LIB_DIR="$ROOT/vendor/lib"
 IMD_INCLUDE_DIR="$ROOT/Sources/CIMobileDevice/include"
 MODEL_NAME="large-v3-turbo-q5_0"
 SKIP_MODEL=0
-MODELS_DIR="$HOME/Library/Application Support/FreeSpeech/models"
+MODELS_DIR="$HOME/Library/Application Support/FreeKit/models"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -123,7 +123,7 @@ for lib in "$LIB_DIR"/*.a "$LIB_DIR"/*.dylib; do
     [[ -e "$lib" ]] || continue
     LINKER_FLAGS+=(-Xlinker "$lib")
 done
-# @rpath candidates for the FreeSpeech binary: vendor/lib resolves the vendored dylibs
+# @rpath candidates for the FreeKit binary: vendor/lib resolves the vendored dylibs
 # when running straight out of .build (swift test / swift build), Frameworks resolves
 # them once the binary is copied into dist/FreeKit.app below.
 LINKER_FLAGS+=(-Xlinker -rpath -Xlinker "$LIB_DIR")
@@ -145,7 +145,7 @@ echo "==> Assembling dist/FreeKit.app"
 APP="$ROOT/dist/FreeKit.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp "$ROOT/.build/release/FreeSpeech" "$APP/Contents/MacOS/FreeSpeech"
+cp "$ROOT/.build/release/FreeKit" "$APP/Contents/MacOS/FreeKit"
 cp "$ROOT/Resources/Info.plist" "$APP/Contents/Info.plist"
 # Icon is pre-generated from assets/logo.svg (qlmanage render + iconutil) and
 # committed, so the build has no fragile SVG-rendering dependency.
@@ -176,7 +176,7 @@ fi
 for dylib in "$APP/Contents/Frameworks"/*.dylib; do
     codesign --force --sign "$SIGN_IDENTITY" "$dylib"
 done
-codesign --force --sign "$SIGN_IDENTITY" --identifier com.cadenwarren.freespeech "$APP"
+codesign --force --sign "$SIGN_IDENTITY" --identifier com.cadenwarren.freekit "$APP"
 
 # Install: keep /Applications current so the copy Caden actually runs is always
 # the latest signed build. A running instance keeps its old code until relaunch.
@@ -188,6 +188,16 @@ cp -R "$APP" "$INSTALL_APP"
 rm -rf "/Applications/FreeSpeech.app"
 
 if [[ "$SKIP_MODEL" -eq 0 ]]; then
+    # Carry over a pre-rename "FreeSpeech" app-support dir (already-downloaded models
+    # included) so a first post-rename build doesn't re-download ~1.6GB. The app itself
+    # does the same migration at launch (AppPaths.migrateLegacyDirectoryIfNeeded); this
+    # covers the case where build.sh runs before the app has ever launched once.
+    LEGACY_SUPPORT="$HOME/Library/Application Support/FreeSpeech"
+    NEW_SUPPORT="$HOME/Library/Application Support/FreeKit"
+    if [[ ! -d "$NEW_SUPPORT" && -d "$LEGACY_SUPPORT" ]]; then
+        echo "==> Migrating $LEGACY_SUPPORT -> $NEW_SUPPORT"
+        mv "$LEGACY_SUPPORT" "$NEW_SUPPORT"
+    fi
     MODEL_FILE="$MODELS_DIR/ggml-$MODEL_NAME.bin"
     if [[ ! -f "$MODEL_FILE" ]]; then
         # Official ggml conversions hosted by the whisper.cpp author.

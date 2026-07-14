@@ -4,8 +4,8 @@ Guidance for Claude Code (and human contributors) working in this repo.
 
 ## What this is
 
-FreeKit is a native macOS menu-bar utility suite, distributed as **FreeSpeech**. It started as a
-single-purpose on-device dictation app (hold a hotkey, speak, text lands at the caret) and grew
+FreeKit is a native macOS menu-bar utility suite. It started as a single-purpose on-device
+dictation app (hold a hotkey, speak, text lands at the caret) and grew
 into a suite of independent tools sharing one app shell, design system, and settings surface. See
 `README.md` for the user-facing pitch and `BUILD_SPEC.md` / `DESIGN_BRIEF.md` for historical specs
 from earlier feature passes (kept for context, not maintained as living docs).
@@ -15,14 +15,14 @@ macOS 26+, Apple Silicon only (uses on-device `FoundationModels` for optional re
 
 ## Module map
 
-Each tool in the suite is a "module": app-side lifecycle in `Sources/FreeSpeech/Modules/<Name>/`,
+Each tool in the suite is a "module": app-side lifecycle in `Sources/FreeKit/Modules/<Name>/`,
 plus (where the module has real logic worth unit-testing) a pure-Foundation counterpart in
-`Sources/FreeSpeechCore/Modules/`. Single source of truth for what modules exist, their catalog
-metadata (id, display name, summary, icon, status) is `Sources/FreeSpeechCore/Modules/Shared/ModuleCatalog.swift`.
+`Sources/FreeKitCore/Modules/`. Single source of truth for what modules exist, their catalog
+metadata (id, display name, summary, icon, status) is `Sources/FreeKitCore/Modules/Shared/ModuleCatalog.swift`.
 
 | Module | Purpose | Core logic |
 |---|---|---|
-| Speech | The original dictation engine: hotkey → record → whisper.cpp transcribe → post-process → insert at caret. Everything else in the suite grew up around this. | `Sources/FreeSpeechCore/Modules/Speech/` (many files — see below) |
+| Speech | The original dictation engine: hotkey → record → whisper.cpp transcribe → post-process → insert at caret. Everything else in the suite grew up around this. | `Sources/FreeKitCore/Modules/Speech/` (many files — see below) |
 | Notebook | Floating scratch notes on a global hotkey, searchable, saved to disk. | `NotebookStore.swift` |
 | Convert | Drag-and-drop file conversion (image/audio/video/doc), on-device. Tool tab (persisted defaults) + App tab (interactive per-file converter). | `ConvertPlan.swift` |
 | Clop | Automatic image/video/PDF compression on copy. | `ClopPlan.swift` |
@@ -34,23 +34,23 @@ metadata (id, display name, summary, icon, status) is `Sources/FreeSpeechCore/Mo
 | HyperKey | Remap the Caps Lock key to a hyper key, Command, or tap-for-Escape. | `HyperKey.swift` |
 | Amphetamine, Cotypist, LinearMouse | Coming-soon placeholders (catalog entry + greyed card only, zero runtime). | `AmphetaminePlan.swift` (others: catalog entry only) |
 
-Adding a module or touching its logic? Start in its `Sources/FreeSpeech/Modules/<Name>/` folder —
+Adding a module or touching its logic? Start in its `Sources/FreeKit/Modules/<Name>/` folder —
 that's everything about its window/UI/lifecycle. If it has non-trivial pure logic (formatting,
 state machines, plan/config types), that lives in one flat file
-`Sources/FreeSpeechCore/Modules/<Name>Plan.swift` (or `<Name>Store.swift` etc. — named for what it
-holds, not forced into "Plan") with a matching `Tests/FreeSpeechCoreTests/<Name>PlanTests.swift`.
+`Sources/FreeKitCore/Modules/<Name>Plan.swift` (or `<Name>Store.swift` etc. — named for what it
+holds, not forced into "Plan") with a matching `Tests/FreeKitCoreTests/<Name>PlanTests.swift`.
 See `CONTRIBUTING.md` for the full "how to add a module" walkthrough.
 
 ## Shared vs per-module code
 
 Three places hold code that isn't owned by a single module:
 
-- **`Sources/FreeSpeech/Shell/`** — app-level infrastructure: `AppDelegate`, `DesignSystem` (the
+- **`Sources/FreeKit/Shell/`** — app-level infrastructure: `AppDelegate`, `DesignSystem` (the
   whole visual language, `DS`/`ds*` prefix), `AppearanceManager`, `StatusBarController`,
   `Permissions`/`PermissionCoach` (mic/accessibility/camera authorization + guided-grant UI),
-  `UpdateManager`. `Sources/FreeSpeech/main.swift` stays at the target root (SPM's top-level-code
+  `UpdateManager`. `Sources/FreeKit/main.swift` stays at the target root (SPM's top-level-code
   convention) rather than moving into `Shell/`.
-- **`Sources/FreeSpeech/Modules/Shared/`** — the module *system* itself: the `AppModule` protocol
+- **`Sources/FreeKit/Modules/Shared/`** — the module *system* itself: the `AppModule` protocol
   and `ModuleRegistry` (`Module.swift`), the Control Center window that hosts every module's
   settings popup (`ControlCenterWindow.swift`, `ModuleSettingsWindow.swift`), the onboarding-style
   per-module guide sheet (`ModuleGuide.swift`), the shared global hotkey event tap
@@ -60,13 +60,13 @@ Three places hold code that isn't owned by a single module:
   helpers (`PanelFade.swift`), and the suite-wide drag-and-drop entry points that hand a dropped
   file to whichever of Clop/Convert wants it (`SuiteDropZoneCoordinator.swift`,
   `SuiteServiceBridge.swift`, wired to the Finder Services menu).
-- **`Sources/FreeSpeechCore/Modules/Shared/`** — its pure-logic counterpart: `ModuleCatalog.swift`
+- **`Sources/FreeKitCore/Modules/Shared/`** — its pure-logic counterpart: `ModuleCatalog.swift`
   (the metadata table above, plus the `Settings` extension every module's enabled/menu-bar/hotkey
   state is stored through), `HotkeyRecognizer.swift` (the actual hold/press/chord matching state
   machine), `KeyNames.swift` (key-code → display string), `CoachPlacement.swift` (geometry for the
   permission-coach popup).
-- **`Sources/FreeSpeechCore/Settings.swift`** (UserDefaults wrapper) and **`Log.swift`** stay at the
-  `FreeSpeechCore` root — they're the foundation everything else, including `Modules/Shared/`,
+- **`Sources/FreeKitCore/Settings.swift`** (UserDefaults wrapper) and **`Log.swift`** stay at the
+  `FreeKitCore` root — they're the foundation everything else, including `Modules/Shared/`,
   builds on, not module-specific themselves.
 
 **Why Speech gets its own `Modules/Speech/` subfolder on both sides, when every other module is a

@@ -7,11 +7,11 @@
 	<key>CFBundleDisplayName</key>
 	<string>FreeKit</string>
 	<key>CFBundleExecutable</key>
-	<string>FreeSpeech</string>
+	<string>FreeKit</string>
 	<key>CFBundleIconFile</key>
 	<string>FreeKit</string>
 	<key>CFBundleIdentifier</key>
-	<string>com.cadenwarren.freespeech</string>
+	<string>com.cadenwarren.freekit</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>

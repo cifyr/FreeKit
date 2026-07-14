@@ -1,7 +1,7 @@
 .build/
 .archive/
 dist/
-vendor/
+vendor
 Sources/CWhisper/include/*
 !Sources/CWhisper/include/whisper_shim.h
 *.log

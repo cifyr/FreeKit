@@ -2,18 +2,18 @@
 import PackageDescription
 
 let package = Package(
-    name: "FreeSpeech",
+    name: "FreeKit",
     // macOS 26: required for the on-device FoundationModels rewrite engine.
     platforms: [.macOS("26.0")],
     targets: [
         // Pure-Foundation logic kept separate so it is unit-testable without linking whisper.
-        .target(name: "FreeSpeechCore", path: "Sources/FreeSpeechCore"),
+        .target(name: "FreeKitCore", path: "Sources/FreeKitCore"),
         .systemLibrary(name: "CWhisper", path: "Sources/CWhisper"),
         .systemLibrary(name: "CIMobileDevice", path: "Sources/CIMobileDevice"),
         .executableTarget(
-            name: "FreeSpeech",
-            dependencies: ["FreeSpeechCore", "CWhisper", "CIMobileDevice"],
-            path: "Sources/FreeSpeech",
+            name: "FreeKit",
+            dependencies: ["FreeKitCore", "CWhisper", "CIMobileDevice"],
+            path: "Sources/FreeKit",
             // Per-module orientation docs, not build inputs — excluded so SPM doesn't warn
             // about "unhandled" files on every build.
             exclude: [
@@ -45,9 +45,9 @@ let package = Package(
             ]
         ),
         .testTarget(
-            name: "FreeSpeechCoreTests",
-            dependencies: ["FreeSpeechCore"],
-            path: "Tests/FreeSpeechCoreTests"
+            name: "FreeKitCoreTests",
+            dependencies: ["FreeKitCore"],
+            path: "Tests/FreeKitCoreTests"
         ),
     ]
 )

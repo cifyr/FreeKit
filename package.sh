@@ -8,7 +8,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP="$ROOT/dist/FreeKit.app"
 MODEL_NAME="large-v3-turbo-q5_0"
-MODELS_SRC="$HOME/Library/Application Support/FreeSpeech/models"
+MODELS_SRC="$HOME/Library/Application Support/FreeKit/models"
 APP_ONLY=0
 
 while [[ $# -gt 0 ]]; do
@@ -57,7 +57,7 @@ cp -R "$DIR/FreeKit.app" "$DEST"
 xattr -dr com.apple.quarantine "$DEST" 2>/dev/null || true
 
 if compgen -G "$DIR/models/*.bin" > /dev/null; then
-    MODELS="$HOME/Library/Application Support/FreeSpeech/models"
+    MODELS="$HOME/Library/Application Support/FreeKit/models"
     mkdir -p "$MODELS"
     cp "$DIR/models/"*.bin "$MODELS/"
     echo "Installed bundled speech model."

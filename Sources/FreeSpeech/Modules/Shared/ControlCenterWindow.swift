@@ -265,7 +265,6 @@ private struct ModuleSettingsCard: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.bottom, 16)
                     }
-                    HStack { Spacer(); SuiteUpdateButton() }
                 }
                 .padding(20)
                 // First time this tool's settings open, show its short how-to.

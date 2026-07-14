@@ -329,9 +329,6 @@ struct SettingsView: View {
                 .padding(.horizontal, 24)
                 .padding(.vertical, 16)
             }
-            HStack { Spacer(); SuiteUpdateButton() }
-                .padding(.horizontal, 24)
-                .padding(.bottom, 12)
         }
         .frame(
             minWidth: 520, idealWidth: 560, maxWidth: .infinity,

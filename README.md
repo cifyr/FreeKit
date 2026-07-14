@@ -19,7 +19,7 @@
 
 ---
 
-FreeSpeech is a menu-bar dictation app built on a local Whisper model. No cloud, no account, no
+FreeKit is a menu-bar dictation app built on a local Whisper model. No cloud, no account, no
 telemetry — the only time it touches the network is to download its model once. It's a native Swift
 app that stays out of your way: hold **Right Option**, talk, release.
 

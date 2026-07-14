@@ -275,36 +275,85 @@ private struct ModuleSettingsCard: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         // Content clips to the plain sheet; the fill and the single border
         // trace the sheet-plus-blob union so the back button's circle reads
-        // as part of the card.
-        .clipShape(RoundedRectangle(cornerRadius: DS.radiusSheet, style: .continuous))
+        // as part of the card. Circular corners here, matching the hand-drawn
+        // blob outline's arcs, so clipped content never overhangs the border.
+        .clipShape(RoundedRectangle(cornerRadius: DS.radiusSheet, style: .circular))
         .background(Self.blobShape.fill(Color.dsInk1))
         .overlay(Self.blobShape.stroke(Color.dsLine, lineWidth: 1))
         .shadow(color: .black.opacity(0.4), radius: 26, y: 12)
     }
 
     private static var blobShape: CornerBlobCardShape {
-        CornerBlobCardShape(cornerRadius: DS.radiusSheet, blobRadius: 18, blobInset: 2)
+        CornerBlobCardShape(
+            cornerRadius: DS.radiusSheet, blobRadius: 18, blobInset: 2, filletRadius: 10)
     }
 }
 
-// The settings sheet with the back button's circle grown out of its top-left
-// corner: one path (rounded rect unioned with the corner circle), so both the
-// fill and the border wrap the combined silhouette with no seam between them.
+// The settings sheet with the back button's circle coalescing out of its
+// top-left corner, metaball-style: the outline runs around the card, curves
+// concavely through a tangent fillet into the circle's outer bulge, and back
+// through a matching fillet onto the top edge — one continuous silhouette
+// with smooth necks, never a circle merely overlapping a rectangle.
 private struct CornerBlobCardShape: Shape {
     let cornerRadius: CGFloat
     let blobRadius: CGFloat
     // How far the circle's center sits inside the corner; deeper = wider neck.
     let blobInset: CGFloat
+    // Radius of the concave neck arcs joining the blob to the card edges.
+    let filletRadius: CGFloat
 
     func path(in rect: CGRect) -> Path {
-        let card = CGPath(
-            roundedRect: rect, cornerWidth: cornerRadius, cornerHeight: cornerRadius,
-            transform: nil)
-        let center = CGPoint(x: rect.minX + blobInset, y: rect.minY + blobInset)
-        let blob = CGPath(ellipseIn: CGRect(
-            x: center.x - blobRadius, y: center.y - blobRadius,
-            width: blobRadius * 2, height: blobRadius * 2), transform: nil)
-        return Path(card.union(blob))
+        let radius = cornerRadius
+        let r = blobRadius
+        let f = filletRadius
+        let origin = CGPoint(x: rect.minX, y: rect.minY)
+        let c = CGPoint(x: origin.x + blobInset, y: origin.y + blobInset)
+        // Fillet circles sit just outside the top and left edges, externally
+        // tangent to the blob; solving the tangency triangle places them.
+        let k = r + f
+        let m = f + blobInset
+        let reach = (k * k - m * m).squareRoot()
+        let filletTop = CGPoint(x: c.x + reach, y: origin.y - f)
+        let filletLeft = CGPoint(x: origin.x - f, y: c.y + reach)
+        let blobMeetsTop = CGPoint(x: c.x + r * reach / k, y: c.y - r * m / k)
+        let blobMeetsLeft = CGPoint(x: c.x - r * m / k, y: c.y + r * reach / k)
+
+        func angle(from center: CGPoint, to point: CGPoint) -> Angle {
+            .radians(Double(atan2(point.y - center.y, point.x - center.x)))
+        }
+
+        var p = Path()
+        p.move(to: CGPoint(x: filletTop.x, y: origin.y))
+        p.addLine(to: CGPoint(x: rect.maxX - radius, y: rect.minY))
+        p.addArc(center: CGPoint(x: rect.maxX - radius, y: rect.minY + radius),
+                 radius: radius, startAngle: .degrees(-90), endAngle: .degrees(0),
+                 clockwise: false)
+        p.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - radius))
+        p.addArc(center: CGPoint(x: rect.maxX - radius, y: rect.maxY - radius),
+                 radius: radius, startAngle: .degrees(0), endAngle: .degrees(90),
+                 clockwise: false)
+        p.addLine(to: CGPoint(x: rect.minX + radius, y: rect.maxY))
+        p.addArc(center: CGPoint(x: rect.minX + radius, y: rect.maxY - radius),
+                 radius: radius, startAngle: .degrees(90), endAngle: .degrees(180),
+                 clockwise: false)
+        p.addLine(to: CGPoint(x: origin.x, y: filletLeft.y))
+        // Concave neck curving off the left edge into the blob...
+        p.addArc(center: filletLeft, radius: f,
+                 startAngle: .degrees(0),
+                 endAngle: angle(from: filletLeft, to: blobMeetsLeft),
+                 clockwise: true)
+        // ...around the blob's outer bulge...
+        p.addArc(center: c, radius: r,
+                 startAngle: angle(from: c, to: blobMeetsLeft),
+                 endAngle: angle(from: c, to: blobMeetsTop),
+                 clockwise: false)
+        // ...and concavely back down onto the top edge.
+        p.addArc(center: filletTop, radius: f,
+                 startAngle: angle(from: filletTop, to: blobMeetsTop),
+                 endAngle: .degrees(90),
+                 clockwise: true)
+        p.closeSubpath()
+        return p
     }
 }
 

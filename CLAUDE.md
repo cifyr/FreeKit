@@ -97,9 +97,9 @@ declares as a system library, so you'll hit "symbol(s) not found for architectur
 `whisper_*` symbol. `build.sh` clones/builds `vendor/whisper.cpp` (CMake, Metal) into
 `vendor/lib/` first and passes the right linker/include flags — it's the only supported way to
 build or test locally. (A fresh checkout also needs the CWhisper headers copied in; `build.sh`
-does that too. If you're working from a `git worktree` instead of the primary checkout, the
-`vendor/` directory is per-checkout — first build there re-clones/rebuilds whisper.cpp, which is
-slow but otherwise safe.)
+does that too. Working from a `git worktree` instead of the primary checkout? `vendor/` is
+gitignored and per-checkout, so symlink it to the primary checkout's already-built copy rather
+than re-cloning whisper.cpp — see the worktree recipe under "Working in this repo generally".)
 
 `build.sh` always installs its result to `/Applications/FreeKit.app` and signs it with the
 project's self-signed **"FreeSpeech Dev"** identity — permission grants (Microphone, Accessibility,
@@ -110,11 +110,26 @@ before touching a running instance's UserDefaults or support files.
 
 ## Working in this repo generally
 
-- Multiple agent sessions (Claude Code, Codex, etc.) may run concurrently against the same local
-  checkout. Git operations (`git add`/`commit`/`reset`) are not isolated between them — a
-  concurrent `git reset` can silently drop another session's staged changes. For anything more
-  than a quick single-commit change, prefer a dedicated `git worktree` on its own branch over
-  working directly in the primary checkout.
+- **One worktree per concurrent session.** Multiple agents (Claude Code, Codex, etc.) may run
+  against this checkout at once, and git operations aren't isolated between them: a concurrent
+  `git add -A` / `reset` / `commit` in another session can sweep your changes into its commit, or
+  drop them mid-edit — this has actually happened here. For anything past a quick single-commit
+  change, work from your own `git worktree` on its own branch instead of the primary checkout. Run
+  these from the primary checkout root:
+  ```
+  git worktree add .claude/worktrees/<short-name> -b feat/<short-name>
+  ln -s "$PWD/vendor" ".claude/worktrees/<short-name>/vendor"   # share built whisper libs, no re-clone
+  ( cd ".claude/worktrees/<short-name>" && ./build.sh --skip-model )   # copies CWhisper headers into this checkout
+  ```
+  Both `.claude/worktrees/` and `vendor/` are gitignored, so the worktree and its `vendor` symlink
+  never get committed. Do all your editing, building, committing, and pushing from inside the
+  worktree on its branch; the symlink means its first build reuses the primary's built libraries
+  instead of rebuilding whisper.cpp. Merge back to `main` only after asking. When the branch is
+  merged or abandoned, clean up with `git worktree remove .claude/worktrees/<short-name>`.
+- If you *do* have to work in the shared primary checkout, never `git add -A` / `git commit -a` /
+  `git reset` — another session's uncommitted work is almost always sitting alongside yours. Stage
+  and commit your files by explicit path (`git commit -- path/one path/two`), which leaves anything
+  else in the index untouched.
 - `docs/` is the public GitHub Pages marketing site (`docs/index.html`, `.nojekyll`) — **not** a
   place for engineering docs. Contributor-facing documentation lives at the repo root
   (`CLAUDE.md`, `CONTRIBUTING.md`) and in per-module `README.md` files, not under `docs/`.

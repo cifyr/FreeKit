@@ -71,7 +71,6 @@ final class ShelfModule: NSObject, AppModule {
     func setMenuBarItemVisible(_ visible: Bool) {}
 
     var settingsPopupSize: NSSize { NSSize(width: 560, height: 480) }
-    var opensOwnWindow: Bool { true }
 
     func makeSettingsPane() -> AnyView {
         paneModel.module = self

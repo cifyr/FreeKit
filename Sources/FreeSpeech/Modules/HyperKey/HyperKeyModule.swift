@@ -72,7 +72,6 @@ final class HyperKeyModule: AppModule, EventRewriter {
     func setMenuBarItemVisible(_ visible: Bool) {}
 
     var settingsStyle: ModuleSettingsStyle { .popup }
-    var opensOwnWindow: Bool { true }
 
     func makeSettingsPane() -> AnyView {
         AnyView(HyperKeySettingsPane(

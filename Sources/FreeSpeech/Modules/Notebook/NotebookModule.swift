@@ -76,8 +76,8 @@ final class NotebookModule: NSObject, AppModule, NSMenuDelegate {
         }
     }
 
+    // Settings stay an in-hub modal; the notes panel is Notebook's own window.
     var settingsPopupSize: NSSize { NSSize(width: 580, height: 660) }
-    var opensOwnWindow: Bool { true }
 
     func makeSettingsPane() -> AnyView {
         // Settings can open while the module is off; the config is cheap and

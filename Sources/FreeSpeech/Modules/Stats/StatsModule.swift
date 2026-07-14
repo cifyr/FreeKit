@@ -211,7 +211,6 @@ final class StatsModule: NSObject, AppModule, NSMenuDelegate {
     }
 
     var settingsPopupSize: NSSize { NSSize(width: 640, height: 720) }
-    var opensOwnWindow: Bool { true }
 
     func makeSettingsPane() -> AnyView {
         AnyView(StatsSettingsPane(settings: settings, onDisplayChange: { [weak self] in

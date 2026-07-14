@@ -87,7 +87,6 @@ final class AmphetamineModule: NSObject, AppModule {
     }
 
     var settingsPopupSize: NSSize { NSSize(width: 600, height: 620) }
-    var opensOwnWindow: Bool { true }
 
     func makeSettingsPane() -> AnyView {
         paneModel.module = self
@@ -276,10 +275,14 @@ final class AmphetamineModule: NSObject, AppModule {
 
     private func updateStatusIcon() {
         guard let button = statusItem?.button else { return }
-        button.image = NSImage(
+        let image = NSImage(
             systemSymbolName: info.symbolName,
             accessibilityDescription: isSessionActive ? "Amphetamine awake" : "Amphetamine idle")
-        button.contentTintColor = isSessionActive ? DS.accent : nil
+        // Without isTemplate, contentTintColor is ignored and the glyph draws in its raw
+        // (near-black) fill — invisible against the menu bar's dark background.
+        image?.isTemplate = true
+        button.image = image
+        button.contentTintColor = isSessionActive ? DS.muted : nil
         let title: String
         if let plan = activePlan {
             title = " " + AmphetaminePlan.countdownText(

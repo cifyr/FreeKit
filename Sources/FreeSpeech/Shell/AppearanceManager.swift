@@ -78,48 +78,42 @@ final class AppearanceManager: ObservableObject {
     static let shared = AppearanceManager()
 
     private enum Key {
-        static let accent = "appearance.accent"
-        static let gradientEnabled = "appearance.gradient.enabled"
-        static let gradientStart = "appearance.gradient.start"
-        static let gradientEnd = "appearance.gradient.end"
         static let gradientDirection = "appearance.gradient.direction"
         static let gradientIntensity = "appearance.gradient.intensity"
-        static let depth = "appearance.depth"
-        static let corners = "appearance.corners"
         static let density = "appearance.density"
     }
 
+    // Fixed to the reference design: "red is reserved for live and for what
+    // is on," so there's no accent picker to contradict that, and the wash
+    // is the suite's one signature look rather than a themeable option.
     static let defaultAccentHex = "FF453A"
-    static let defaultGradientStartHex = "271518"
-    static let defaultGradientEndHex = "10141C"
+    static let defaultGradientStartHex = "3B2622"
+    static let defaultGradientEndHex = "16202E"
 
     private let defaults: UserDefaults
 
-    @Published var accentHex: String { didSet { persist(accentHex, forKey: Key.accent) } }
-    @Published var gradientEnabled: Bool { didSet { persist(gradientEnabled, forKey: Key.gradientEnabled) } }
-    @Published var gradientStartHex: String { didSet { persist(gradientStartHex, forKey: Key.gradientStart) } }
-    @Published var gradientEndHex: String { didSet { persist(gradientEndHex, forKey: Key.gradientEnd) } }
+    let accentHex: String = AppearanceManager.defaultAccentHex
+    let gradientStartHex: String = AppearanceManager.defaultGradientStartHex
+    let gradientEndHex: String = AppearanceManager.defaultGradientEndHex
+    let depth: AppearanceDepth = .soft
+    let corners: AppearanceCornerStyle = .balanced
+
+    // Direction, intensity, and density are the only knobs left in the
+    // Appearance tab — everything else about the wash is fixed.
     @Published var gradientDirection: AppearanceGradientDirection {
         didSet { persist(gradientDirection.rawValue, forKey: Key.gradientDirection) }
     }
     @Published var gradientIntensity: Double {
         didSet { persist(gradientIntensity, forKey: Key.gradientIntensity) }
     }
-    @Published var depth: AppearanceDepth { didSet { persist(depth.rawValue, forKey: Key.depth) } }
-    @Published var corners: AppearanceCornerStyle { didSet { persist(corners.rawValue, forKey: Key.corners) } }
     @Published var density: AppearanceDensity { didSet { persist(density.rawValue, forKey: Key.density) } }
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        accentHex = defaults.string(forKey: Key.accent) ?? Self.defaultAccentHex
-        gradientEnabled = defaults.object(forKey: Key.gradientEnabled) as? Bool ?? false
-        gradientStartHex = defaults.string(forKey: Key.gradientStart) ?? Self.defaultGradientStartHex
-        gradientEndHex = defaults.string(forKey: Key.gradientEnd) ?? Self.defaultGradientEndHex
         gradientDirection = AppearanceGradientDirection(
             rawValue: defaults.string(forKey: Key.gradientDirection) ?? "") ?? .diagonal
-        gradientIntensity = defaults.object(forKey: Key.gradientIntensity) as? Double ?? 0.42
-        depth = AppearanceDepth(rawValue: defaults.string(forKey: Key.depth) ?? "") ?? .soft
-        corners = AppearanceCornerStyle(rawValue: defaults.string(forKey: Key.corners) ?? "") ?? .balanced
+        // Reference wash runs at ~0.72; 0.42 read as barely-there in testing.
+        gradientIntensity = defaults.object(forKey: Key.gradientIntensity) as? Double ?? 0.62
         density = AppearanceDensity(rawValue: defaults.string(forKey: Key.density) ?? "") ?? .comfortable
     }
 
@@ -128,15 +122,35 @@ final class AppearanceManager: ObservableObject {
     var gradientStartColor: Color { Color(nsColor: NSColor(hex: gradientStartHex) ?? DS.ink0) }
     var gradientEndColor: Color { Color(nsColor: NSColor(hex: gradientEndHex) ?? DS.ink0) }
 
+    // Shared by DSWashLayer and any custom Shape that needs to fill itself
+    // with the wash directly (Shape.fill() overflows its nominal frame
+    // correctly for shapes like the settings card's corner blob; a View
+    // background clipped to that same shape can't, since clipping can only
+    // reveal pixels the view already laid out within its own bounds).
+    //
+    // A pair of soft radial blobs from opposite corners, not a hard-edged
+    // linear band — closer to the reference's own default rendering, and
+    // reads as organic/"wavy" with a slow, gradual falloff instead of a
+    // mechanically straight diagonal seam. EllipticalGradient's radius
+    // fractions are relative to each fill's own bounding box, so both blobs
+    // stay correctly proportioned whether they're filling a small popup or
+    // the full window — no GeometryReader needed.
+    var washPrimary: EllipticalGradient {
+        EllipticalGradient(
+            colors: [gradientStartColor.opacity(gradientIntensity), .clear],
+            center: gradientDirection.points.start,
+            startRadiusFraction: 0, endRadiusFraction: 0.85)
+    }
+    var washSecondary: EllipticalGradient {
+        EllipticalGradient(
+            colors: [gradientEndColor.opacity(gradientIntensity), .clear],
+            center: gradientDirection.points.end,
+            startRadiusFraction: 0, endRadiusFraction: 0.85)
+    }
+
     func reset() {
-        accentHex = Self.defaultAccentHex
-        gradientEnabled = false
-        gradientStartHex = Self.defaultGradientStartHex
-        gradientEndHex = Self.defaultGradientEndHex
         gradientDirection = .diagonal
-        gradientIntensity = 0.42
-        depth = .soft
-        corners = .balanced
+        gradientIntensity = 0.62
         density = .comfortable
     }
 
@@ -145,30 +159,43 @@ final class AppearanceManager: ObservableObject {
     }
 }
 
-struct AppearanceBackground: View {
+// Pure visual wash + grain, reused two ways: AppearanceBackground wraps it
+// with window-drag hit-testing for a real window's content root; module
+// popups that float as a card inside Control Center (not a window of their
+// own) use this directly, clipped to their own shape, so they carry the same
+// signature look without claiming background-drag.
+struct DSWashLayer: View {
     @ObservedObject private var appearance = AppearanceManager.shared
+    var baseColor: Color = .dsInk0
+    // A second translucent pass compounds the blobs' alpha coverage for
+    // surfaces that want a richer wash than the shared default — the Notch,
+    // whose color is otherwise easy to lose against real hardware black.
+    var bold: Bool = false
 
     var body: some View {
         ZStack {
-            Color.dsInk0
-            if appearance.gradientEnabled {
-                let points = appearance.gradientDirection.points
-                LinearGradient(
-                    colors: [
-                        appearance.gradientStartColor.opacity(appearance.gradientIntensity),
-                        appearance.gradientEndColor.opacity(appearance.gradientIntensity),
-                    ],
-                    startPoint: points.start,
-                    endPoint: points.end)
+            baseColor
+            appearance.washPrimary
+            appearance.washSecondary
+            if bold {
+                appearance.washPrimary
+                appearance.washSecondary
             }
+            DSGrainOverlay()
         }
-        .ignoresSafeArea()
-        // FreeKit windows no longer use isMovableByWindowBackground (AppKit's
-        // background drag fought slider/control gestures and moved the window
-        // mid-drag). Instead this shared background IS the drag surface:
-        // content in front (text, buttons, sliders) wins hit-testing, so only
-        // true empty-background drags move the window.
-        .gesture(WindowDragGesture())
+    }
+}
+
+struct AppearanceBackground: View {
+    var body: some View {
+        DSWashLayer()
+            .ignoresSafeArea()
+            // FreeKit windows no longer use isMovableByWindowBackground (AppKit's
+            // background drag fought slider/control gestures and moved the window
+            // mid-drag). Instead this shared background IS the drag surface:
+            // content in front (text, buttons, sliders) wins hit-testing, so only
+            // true empty-background drags move the window.
+            .gesture(WindowDragGesture())
     }
 }
 

@@ -3,10 +3,11 @@ import CIMobileDevice
 import FreeSpeechCore
 
 // iPhone/iPad/Apple Watch battery via libimobiledevice's lockdownd + companion_proxy
-// services. Only works against a device already trust-paired over USB or WiFi sync —
-// there is no way to read this battery level without that relationship. Silent no-op
-// (empty result, not an error) for anything not paired: this mirrors the module's
-// existing quiet-failure style for the IOKit Bluetooth scan.
+// services, feeding into Stats' device battery section alongside the Bluetooth-accessory
+// scan (StatsSampler.bluetoothAccessoryBatteries). Only works against a device already
+// trust-paired over USB or WiFi sync — there is no way to read this battery level without
+// that relationship. Silent no-op (empty result, not an error) for anything not paired:
+// this mirrors the module's existing quiet-failure style for the IOKit Bluetooth scan.
 enum IDeviceBatteryReader {
     static func read() -> [DeviceBattery] {
         var results: [DeviceBattery] = []
@@ -29,7 +30,7 @@ enum IDeviceBatteryReader {
             var device: idevice_t?
             guard idevice_new_with_options(&device, udidCString, options) == IDEVICE_E_SUCCESS,
                   let device else {
-                Log.info("devices: idevice_new_with_options failed for \(udid), skipping")
+                Log.info("stats: idevice_new_with_options failed for \(udid), skipping")
                 continue
             }
             defer { idevice_free(device) }
@@ -38,18 +39,18 @@ enum IDeviceBatteryReader {
             guard lockdownd_client_new_with_handshake(device, &lockdown, "FreeKit") == LOCKDOWN_E_SUCCESS,
                   let lockdown else {
                 // Not trust-paired (or paired to a different Mac) — expected, not an error.
-                Log.info("devices: lockdownd handshake failed for \(udid), not trust-paired")
+                Log.info("stats: lockdownd handshake failed for \(udid), not trust-paired")
                 continue
             }
             defer { lockdownd_client_free(lockdown) }
 
             guard let level = batteryLevel(lockdown) else {
-                Log.info("devices: no battery info for \(udid)")
+                Log.info("stats: no battery info for \(udid)")
                 continue
             }
             let name = deviceName(lockdown) ?? "iPhone or iPad"
             results.append(DeviceBattery(name: name, percent: level))
-            Log.info("devices: read \(name) (\(udid)) battery \(level)%")
+            Log.info("stats: read \(name) (\(udid)) battery \(level)%")
 
             if let watch = watchBattery(device: device) {
                 results.append(watch)
@@ -110,7 +111,7 @@ enum IDeviceBatteryReader {
         }
         defer { plist_free(nameValue) }
 
-        Log.info("devices: read \(name) (\(watchUDID)) companion battery \(level)%")
+        Log.info("stats: read \(name) (\(watchUDID)) companion battery \(level)%")
         return DeviceBattery(name: name, percent: Int(level))
     }
 

@@ -177,12 +177,22 @@ private struct HyperKeySettingsPane: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 8) {
-                DSSectionLabel("Hold acts as")
-                Text(modifiers.symbols.isEmpty ? "nothing" : modifiers.symbols)
-                    .font(.system(size: 13, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(modifiers.symbols.isEmpty ? Color.dsFaint : Color.dsAccent)
-                    .dsContentCrossfade(modifiers.symbols)
+            HStack(spacing: 14) {
+                DSKeycap(label: "caps lock") {
+                    Image(systemName: "capslock.fill")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(Color.dsMuted)
+                }
+                Image(systemName: "arrow.right")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Color.dsAccent.opacity(0.7))
+                VStack(alignment: .leading, spacing: 6) {
+                    DSSectionLabel("Hold acts as")
+                    Text(modifiers.symbols.isEmpty ? "nothing" : modifiers.symbols)
+                        .font(.system(size: 18, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(modifiers.symbols.isEmpty ? Color.dsFaint : Color.dsAccent)
+                        .dsContentCrossfade(modifiers.symbols)
+                }
             }
             HStack(spacing: 8) {
                 DSChip(title: "\u{2726} Hyper", selected: modifiers == .hyper) {

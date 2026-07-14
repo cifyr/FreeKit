@@ -571,6 +571,49 @@ enum NotchMetrics {
 
 /// The top corners curve *outward* into the menu bar rather than in, so the panel reads as the
 /// physical cutout growing instead of a rectangle parked beneath it. Ported from boring.notch.
+// A rectangle whose bottom edge undulates in a gentle sine wave instead of
+// running perfectly straight — used so the header's solid-black band meets
+// the wash along an organic line rather than a ruler-straight seam. Amplitude
+// 0 degrades to a plain rect (used for the collapsed pill, which has no
+// wash beneath it to transition into).
+private struct WavyEdgeRect: Shape {
+    var amplitude: CGFloat
+    var wavelength: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        var p = Path()
+        p.move(to: CGPoint(x: rect.minX, y: rect.minY))
+        p.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+        p.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+        guard amplitude > 0, wavelength > 0 else {
+            p.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
+            p.closeSubpath()
+            return p
+        }
+        // Straight segments between sample points read as faceted/jagged no
+        // matter how many of them there are — routing a quad curve through
+        // the midpoint of each pair instead gives an actually continuous
+        // curve, the same "smooth polyline" trick used to draw smooth line
+        // charts.
+        let steps = max(Int(rect.width / 10), 10)
+        var points: [CGPoint] = []
+        for i in 0...steps {
+            let t = CGFloat(i) / CGFloat(steps)
+            let x = rect.maxX - t * rect.width
+            let y = rect.maxY + amplitude * sin((x / wavelength) * 2 * .pi)
+            points.append(CGPoint(x: x, y: y))
+        }
+        p.addLine(to: points[0])
+        for i in 1..<points.count {
+            let mid = CGPoint(x: (points[i - 1].x + points[i].x) / 2, y: (points[i - 1].y + points[i].y) / 2)
+            p.addQuadCurve(to: mid, control: points[i - 1])
+        }
+        p.addLine(to: points[points.count - 1])
+        p.closeSubpath()
+        return p
+    }
+}
+
 struct NotchShape: Shape {
     var topCornerRadius: CGFloat
     var bottomCornerRadius: CGFloat
@@ -918,17 +961,39 @@ struct BoringNotchPanelView: View {
                     // The album-art tint wash sits behind the black fade, not in front of
                     // it — otherwise a colorful album cover paints over the black band
                     // instead of black winning at the top no matter what's playing.
-                    if state.expanded { artworkTintWash }
-                    // Solid for the top half of the panel, whatever its current height —
-                    // not a fixed/capped band — then fades out over the bottom half.
-                    LinearGradient(
-                        gradient: Gradient(stops: [
-                            .init(color: .black, location: 0),
-                            .init(color: .black, location: 0.5),
-                            .init(color: .black.opacity(0), location: 1),
-                        ]),
-                        startPoint: .top, endPoint: .bottom)
-                        .frame(height: state.currentSize.height)
+                    if state.expanded {
+                        artworkTintWash
+                        // The reference's wash lives only in the lower content, never
+                        // touching the header strip or the physical cutout — the black
+                        // fade below draws on top of it near the top edge, same as the
+                        // reference keeps its mesh clear of the notch entirely.
+                        DSWashLayer(baseColor: .clear, bold: true)
+                    }
+                    // Solid black for the band, meeting the wash along an undulating
+                    // line instead of a ruler-straight horizontal seam. While collapsed
+                    // the whole pill IS the band (same as before); while expanded it's
+                    // capped to a header-height strip so it blends the physical cutout
+                    // without also blacking out the wash across the rest of the much
+                    // taller expanded panel.
+                    //
+                    // blur() softens every edge of the shape, not just the wavy bottom
+                    // one — left unguarded, that also fades the flush top edge into a
+                    // faint black-to-transparent gradient right where the panel meets
+                    // the real menu bar, showing a sliver of wash color instead of solid
+                    // bezel-black. Extending the rect blurPad above the visible frame
+                    // and shifting it back down by the same amount pushes that top-edge
+                    // softening above the panel's own clip region, so only the wavy
+                    // bottom edge's blur ever renders.
+                    let bandHeight = state.expanded ? min(70, state.currentSize.height) : state.currentSize.height
+                    let blurPad: CGFloat = state.expanded ? 20 : 0
+                    WavyEdgeRect(amplitude: state.expanded ? 6 : 0, wavelength: 90)
+                        .fill(Color.black)
+                        .frame(height: bandHeight + blurPad)
+                        .offset(y: -blurPad)
+                        .blur(radius: state.expanded ? 14 : 0)
+                    // Collapsed pill has no room for the wash to read, but still gets a
+                    // touch of grain so it's not the one bare surface in the suite.
+                    if !state.expanded { DSGrainOverlay(opacity: 0.06) }
                 }
             }
             // A physical notch must stay seamless bezel-black with no rim; the virtual bar on
@@ -1147,7 +1212,12 @@ struct BoringNotchPanelView: View {
             // edges as the wings so the clock's left aligns with the media artwork.
             headerStrip
                 .padding(.horizontal, NotchMetrics.openTopRadius + 16)
-            HStack(alignment: .top, spacing: 18) {
+            // Symmetric spacers center the wings row (media + calendar) in
+            // whatever room is left below the header, instead of the row
+            // hugging the top with dead space beneath it whenever the
+            // calendar wing is taller than the media wing's fixed content.
+            Spacer(minLength: 4)
+            HStack(alignment: .center, spacing: 18) {
                 if preferences.mediaWingLeading {
                     // Each wing's content hugs whichever edge faces away from the divider, so
                     // swapping which side a wing sits on must also swap its own alignment —
@@ -1165,11 +1235,7 @@ struct BoringNotchPanelView: View {
             // Clear the shape's straight edges (openTopRadius inboard) plus a wider side margin so
             // the wings aren't cramped against the flared shoulders.
             .padding(.horizontal, NotchMetrics.openTopRadius + 16)
-            // Sit the wings just under the header strip; a bottom margin keeps the calendar's
-            // last rows off the shape's bottom curve now that no button row lives down there.
-            .padding(.top, 2)
-            .padding(.bottom, 10)
-            Spacer(minLength: 0)
+            Spacer(minLength: 10)
         }
     }
     private func headerBarButton(symbol: String, help: String,
@@ -1715,7 +1781,7 @@ struct BoringNotchSettingsPane: View {
         HStack(spacing: 10) {
             Text(title).font(.system(size: 12, weight: .semibold)).foregroundStyle(Color.dsPaper)
                 .frame(width: 112, alignment: .leading)
-            Slider(value: value, in: range).tint(Color.dsAccent).dsNoWindowDrag()
+            DSSlider(value: value, range: range)
             Text(suffix == "s" ? String(format: "%.1fs", value.wrappedValue) : "\(Int(value.wrappedValue))\(suffix)")
                 .font(.system(size: 10, design: .monospaced)).foregroundStyle(Color.dsMuted)
                 .frame(width: 50, alignment: .trailing)

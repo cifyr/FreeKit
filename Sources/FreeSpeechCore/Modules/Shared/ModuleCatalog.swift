@@ -70,15 +70,6 @@ public enum ModuleCatalog {
         summary: "Menu bar manager: hide and show other apps' menu bar icons, and FreeKit's own.",
         symbolName: "snowflake", status: .comingSoon, ownsMenuBarItem: true)
 
-    // Bluetooth accessories via HID-over-Bluetooth (AirPods, Magic
-    // Mouse/Keyboard/Trackpad); iPhone/iPad/Watch via libimobiledevice against
-    // a device already trust-paired over USB or WiFi sync — see
-    // Sources/FreeSpeech/Modules/Devices/IDeviceBatteryReader.swift.
-    public static let devices = ModuleInfo(
-        id: "devices", displayName: "Devices",
-        summary: "Battery level for AirPods, Magic accessories, and paired iPhone, iPad, and Apple Watch.",
-        symbolName: "battery.100percent", status: .available, ownsMenuBarItem: true)
-
     public static let cotypist = ModuleInfo(
         id: "cotypist", displayName: "Cotypist",
         summary: "On-device inline text prediction anywhere you type.",
@@ -128,7 +119,7 @@ public enum ModuleCatalog {
         symbolName: "sparkles.rectangle.stack", status: .available, ownsMenuBarItem: false)
 
     public static let all: [ModuleInfo] = [
-        speech, notebook, autoclicker, stats, hyperKey, ice, devices,
+        speech, notebook, autoclicker, stats, hyperKey, ice,
         cotypist, appCleaner, linearMouse, amphetamine, clop, shelf, boringNotch, convert,
     ]
 

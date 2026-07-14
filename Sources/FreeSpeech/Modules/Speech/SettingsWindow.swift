@@ -296,7 +296,6 @@ struct SettingsView: View {
     @ObservedObject var store: SettingsStore
     // Observed directly: the store does not republish the manager's changes.
     @ObservedObject var updates: UpdateManager
-    @ObservedObject private var appearance = AppearanceManager.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -329,11 +328,16 @@ struct SettingsView: View {
                 .padding(.horizontal, 24)
                 .padding(.vertical, 16)
             }
+            .dsScrollEdgeFade()
         }
         .frame(
             minWidth: 520, idealWidth: 560, maxWidth: .infinity,
             minHeight: 560, idealHeight: 680, maxHeight: .infinity)
-        .background(AppearanceBackground())
+        // Hosted edge-to-edge inside ModuleSettingsCard (popupUsesOwnChrome),
+        // which already paints the wash+grain at the outer blob-shape level —
+        // painting a second independent one here rendered its gradient in a
+        // slightly different frame, showing up as a visible seam right where
+        // the back button's circle meets the card body.
         .onAppear { store.refresh() }
         .onDisappear { store.endShortcutCapture() }
     }
@@ -356,7 +360,7 @@ struct SettingsView: View {
                     HStack {
                         sectionLabel("Split speakers (system audio)")
                         Spacer()
-                        DSCheckbox(isOn: $store.splitSpeakers)
+                        DSToggle(isOn: $store.splitSpeakers)
                     }
                     Text("System-audio captures get a line break whenever the voice changes — each speaker on their own line. Uses a second on-device pass, adding roughly one transcription's latency. English-focused. Rewrite modes are skipped for split transcripts.")
                         .font(.system(size: 11))
@@ -411,7 +415,7 @@ struct SettingsView: View {
                     HStack {
                         sectionLabel("Keep transcript on clipboard")
                         Spacer()
-                        DSCheckbox(isOn: $store.copyToClipboard)
+                        DSToggle(isOn: $store.copyToClipboard)
                     }
                     Text("On: every dictation stays on the clipboard after insertion, ready to paste again. Off: your previous clipboard contents are restored.")
                         .font(.system(size: 11))
@@ -474,7 +478,7 @@ struct SettingsView: View {
                     HStack {
                         sectionLabel("Learning")
                         Spacer()
-                        DSCheckbox(isOn: $store.learningEnabled)
+                        DSToggle(isOn: $store.learningEnabled)
                     }
                     Text(store.learnedSummary)
                         .font(.system(size: 13))
@@ -555,7 +559,7 @@ struct SettingsView: View {
                     HStack {
                         sectionLabel("Use on-screen context")
                         Spacer()
-                        DSCheckbox(isOn: $store.screenContextEnabled)
+                        DSToggle(isOn: $store.screenContextEnabled)
                     }
                     Text("Reads names visible in the focused window when you start dictating — replying to Gurkaran makes \"Gurkaran\" transcribe correctly. Local only, nothing stored.")
                         .font(.system(size: 11))
@@ -571,7 +575,7 @@ struct SettingsView: View {
                             .font(.system(size: 13, weight: .semibold))
                             .foregroundStyle(Color.dsPaper)
                         Spacer()
-                        DSCheckbox(isOn: $store.spokenCommandsEnabled)
+                        DSToggle(isOn: $store.spokenCommandsEnabled)
                     }
                     Text("\"new line\", \"new paragraph\" become breaks; \"scratch that\" discards what you said before it.")
                         .font(.system(size: 11))
@@ -581,7 +585,7 @@ struct SettingsView: View {
                             .font(.system(size: 13, weight: .semibold))
                             .foregroundStyle(Color.dsPaper)
                         Spacer()
-                        DSCheckbox(isOn: $store.fillerStrippingEnabled)
+                        DSToggle(isOn: $store.fillerStrippingEnabled)
                     }
                     Text("Removes um, uh, erm before inserting.")
                         .font(.system(size: 11))
@@ -741,14 +745,14 @@ struct SettingsView: View {
                             .font(.system(size: 13, weight: .semibold))
                             .foregroundStyle(Color.dsPaper)
                         Spacer()
-                        DSCheckbox(isOn: $store.soundCuesEnabled)
+                        DSToggle(isOn: $store.soundCuesEnabled)
                     }
                     HStack {
                         Text("Launch at login")
                             .font(.system(size: 13, weight: .semibold))
                             .foregroundStyle(Color.dsPaper)
                         Spacer()
-                        DSCheckbox(isOn: Binding(
+                        DSToggle(isOn: Binding(
                             get: { store.launchAtLogin },
                             set: { store.setLaunchAtLogin($0) }))
                     }
@@ -788,7 +792,7 @@ struct SettingsView: View {
                     HStack {
                         sectionLabel("History")
                         Spacer()
-                        DSCheckbox(isOn: $store.historyEnabled)
+                        DSToggle(isOn: $store.historyEnabled)
                     }
                     Text("Local transcript history, browsable from the menu bar.")
                         .font(.system(size: 11))
@@ -878,7 +882,12 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 10, content: content)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(16)
-            .background(Color.dsInk1, in: RoundedRectangle(cornerRadius: DS.radiusCard, style: .continuous))
+            .background(
+                ZStack {
+                    Color.dsInk1
+                    DSGrainOverlay(opacity: 0.1)
+                }
+                .clipShape(RoundedRectangle(cornerRadius: DS.radiusCard, style: .continuous)))
             .overlay(
                 RoundedRectangle(cornerRadius: DS.radiusCard, style: .continuous)
                     .strokeBorder(Color.dsLine, lineWidth: 1))

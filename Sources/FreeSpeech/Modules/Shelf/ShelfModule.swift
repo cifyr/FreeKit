@@ -212,14 +212,12 @@ private struct ShelfSettingsPane: View {
                     Text("Low")
                         .font(.system(size: 11))
                         .foregroundStyle(Color.dsFaint)
-                    Slider(value: Binding(
+                    DSSlider(value: Binding(
                         get: { sensitivity },
                         set: {
                             sensitivity = $0
                             settings.setModuleDouble($0, id: moduleID, key: ShelfModule.Key.sensitivity)
-                        }), in: 0...1)
-                        .tint(Color.dsAccent)
-                        .dsNoWindowDrag()
+                        }), range: 0...1)
                     Text("High")
                         .font(.system(size: 11))
                         .foregroundStyle(Color.dsFaint)

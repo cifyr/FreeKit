@@ -211,6 +211,15 @@ struct ControlCenterView: View {
                     Spacer()
                 }
                 .padding(.top, 8)
+                .padding(.bottom, 11)
+                .overlay(alignment: .bottom) {
+                    // Fade-edged baseline instead of a hard rule, matching
+                    // the reference's "baseline is a fade, not a line".
+                    LinearGradient(
+                        colors: [Color.dsPaper.opacity(0.11), Color.dsPaper.opacity(0.11), .clear],
+                        startPoint: .leading, endPoint: .trailing)
+                        .frame(height: 1)
+                }
             }
             if selectedSection == .appearance {
                 AppearancePane()
@@ -234,6 +243,7 @@ struct ControlCenterView: View {
                     }
                     .padding(.bottom, 12)
                 }
+                .dsScrollEdgeFade()
                 .transition(.dsCrossfade)
             }
             SuitePrefsFooter()
@@ -251,6 +261,7 @@ struct ControlCenterView: View {
 // to edge; every other module gets the shared kicker + "Settings" header.
 private struct ModuleSettingsCard: View {
     let module: AppModule
+    @ObservedObject private var appearance = AppearanceManager.shared
 
     var body: some View {
         Group {
@@ -272,6 +283,7 @@ private struct ModuleSettingsCard: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.bottom, 16)
                     }
+                    .dsScrollEdgeFade()
                 }
                 .padding(20)
                 // First time this tool's settings open, show its short how-to.
@@ -284,7 +296,30 @@ private struct ModuleSettingsCard: View {
         // as part of the card. Circular corners here, matching the hand-drawn
         // blob outline's arcs, so clipped content never overhangs the border.
         .clipShape(RoundedRectangle(cornerRadius: DS.radiusSheet, style: .circular))
-        .background(Self.blobShape.fill(Color.dsInk1))
+        // Filling the blob Shape directly (not a View clipped to it) matters
+        // here: the blob deliberately overflows its nominal frame to bulge
+        // out for the back button, and a clipped View can't reveal anything
+        // beyond its own laid-out bounds — the bulge rendered empty/see-
+        // through until this switched to Shape.fill(), which draws the full
+        // path (including the overflow) as one continuous surface.
+        .background(
+            ZStack {
+                // dsInk0, not dsInk1: the same wash opacity reads noticeably
+                // more saturated against the lighter ink1 base than it does
+                // on the main window's dsInk0 background — matching the base
+                // color is what makes this card's wash read as subdued the
+                // same way the app background's does, at the same intensity.
+                Self.blobShape.fill(Color.dsInk0)
+                Self.blobShape.fill(appearance.washPrimary)
+                Self.blobShape.fill(appearance.washSecondary)
+                // Same reasoning as the gradient above: ImagePaint as a
+                // Shape.fill() style tiles correctly across the full path,
+                // overflow included, where a clipped grain View would not.
+                Self.blobShape
+                    .fill(ImagePaint(image: Image(nsImage: DSGrainOverlay.tile), sourceRect: Self.grainSourceRect))
+                    .blendMode(.overlay)
+                    .opacity(0.16)
+            })
         .overlay(Self.blobShape.stroke(Color.dsLine, lineWidth: 1))
         .shadow(color: .black.opacity(0.4), radius: 26, y: 12)
     }
@@ -293,6 +328,12 @@ private struct ModuleSettingsCard: View {
         CornerBlobCardShape(
             cornerRadius: DS.radiusSheet, blobRadius: 18, blobInset: 2, filletRadius: 10)
     }
+
+    // ImagePaint's sourceRect is a fraction of the unit square, not a pixel
+    // size, so it can't be computed from the tile's native 128px size alone —
+    // this approximates a ~128pt tile at a typical ~560pt popup width so the
+    // grain reads at roughly the same density as everywhere else it's used.
+    private static let grainSourceRect = CGRect(x: 0, y: 0, width: 0.46, height: 0.46)
 }
 
 // The settings sheet with the back button's circle coalescing out of its
@@ -366,90 +407,34 @@ private struct CornerBlobCardShape: Shape {
 private struct AppearancePane: View {
     @ObservedObject private var appearance = AppearanceManager.shared
 
-    private let accentPresets: [(name: String, hex: String)] = [
-        ("Red", "FF453A"),
-        ("Orange", "FF9F0A"),
-        ("Mint", "63E6BE"),
-        ("Blue", "0A84FF"),
-        ("Violet", "BF5AF2"),
-    ]
-
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: appearance.density.contentSpacing) {
                 preview
 
-                DSSettingsCard(title: "Accent") {
-                    HStack(spacing: 10) {
-                        ForEach(accentPresets, id: \.hex) { preset in
-                            Button {
-                                appearance.accentHex = preset.hex
-                            } label: {
-                                VStack(spacing: 6) {
-                                    Circle()
-                                        .fill(Color(nsColor: NSColor(hex: preset.hex) ?? .systemRed))
-                                        .frame(width: 25, height: 25)
-                                        .overlay(
-                                            Circle().strokeBorder(
-                                                appearance.accentHex == preset.hex
-                                                    ? Color.dsPaper : Color.dsLine,
-                                                lineWidth: appearance.accentHex == preset.hex ? 2 : 1))
-                                    Text(preset.name)
-                                        .font(.system(size: 10, weight: .medium))
-                                        .foregroundStyle(Color.dsMuted)
-                                }
-                                .frame(maxWidth: .infinity)
+                DSSettingsCard(title: "Wash") {
+                    HStack(spacing: 8) {
+                        ForEach(AppearanceGradientDirection.allCases) { direction in
+                            DSChip(title: direction.rawValue,
+                                   selected: appearance.gradientDirection == direction) {
+                                appearance.gradientDirection = direction
                             }
-                            .buttonStyle(.plain)
                         }
-                        ColorPicker("Custom", selection: colorBinding(for: \.accentHex), supportsOpacity: false)
-                            .labelsHidden()
-                            .help("Choose a custom accent color")
+                    }
+
+                    HStack(spacing: 12) {
+                        Text("Intensity")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(Color.dsPaper)
+                        DSSlider(value: $appearance.gradientIntensity, range: 0.1...0.85)
+                        Text("\(Int(appearance.gradientIntensity * 100))%")
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(Color.dsMuted)
+                            .frame(width: 34, alignment: .trailing)
                     }
                 }
 
-                DSSettingsCard(title: "Window Gradient") {
-                    DSToggleRow(
-                        title: "Use gradient backgrounds",
-                        caption: "Applied consistently to every FreeKit window.",
-                        isOn: $appearance.gradientEnabled)
-
-                    if appearance.gradientEnabled {
-                        HStack(spacing: 16) {
-                            colorRow("Start", keyPath: \.gradientStartHex)
-                            colorRow("End", keyPath: \.gradientEndHex)
-                            Spacer()
-                        }
-
-                        HStack(spacing: 8) {
-                            ForEach(AppearanceGradientDirection.allCases) { direction in
-                                DSChip(title: direction.rawValue,
-                                       selected: appearance.gradientDirection == direction) {
-                                    appearance.gradientDirection = direction
-                                }
-                            }
-                        }
-
-                        HStack(spacing: 12) {
-                            Text("Intensity")
-                                .font(.system(size: 12, weight: .semibold))
-                                .foregroundStyle(Color.dsPaper)
-                            Slider(value: $appearance.gradientIntensity, in: 0.1...0.85)
-                                .tint(Color.dsAccent)
-                                .dsNoWindowDrag()
-                            Text("\(Int(appearance.gradientIntensity * 100))%")
-                                .font(.system(size: 11, design: .monospaced))
-                                .foregroundStyle(Color.dsMuted)
-                                .frame(width: 34, alignment: .trailing)
-                        }
-                    }
-                }
-
-                DSSettingsCard(title: "Interface Shape") {
-                    choiceRow("Depth", values: AppearanceDepth.allCases,
-                              selected: appearance.depth) { appearance.depth = $0 }
-                    choiceRow("Corners", values: AppearanceCornerStyle.allCases,
-                              selected: appearance.corners) { appearance.corners = $0 }
+                DSSettingsCard(title: "Layout") {
                     choiceRow("Density", values: AppearanceDensity.allCases,
                               selected: appearance.density) { appearance.density = $0 }
                 }
@@ -457,6 +442,7 @@ private struct AppearancePane: View {
             }
             .padding(.bottom, 12)
         }
+        .dsScrollEdgeFade()
     }
 
     private var preview: some View {
@@ -468,10 +454,10 @@ private struct AppearancePane: View {
                 .background(Color.dsInk2,
                             in: RoundedRectangle(cornerRadius: DS.radiusKeycap, style: .continuous))
             VStack(alignment: .leading, spacing: 3) {
-                Text("Live Preview")
+                Text("Duotone Wash")
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(Color.dsPaper)
-                Text("Changes are saved automatically and applied across the suite.")
+                Text("FreeKit's signature look: warm-to-cool grain wash, red reserved for live and for what's on.")
                     .font(.system(size: 11))
                     .foregroundStyle(Color.dsMuted)
             }
@@ -496,24 +482,6 @@ private struct AppearancePane: View {
             RoundedRectangle(cornerRadius: DS.radiusCard, style: .continuous)
                 .strokeBorder(Color.dsAccent.opacity(0.35), lineWidth: 1))
         .shadow(color: depthShadowColor, radius: depthShadowRadius, y: depthShadowY)
-    }
-
-    private func colorRow(_ title: String, keyPath: ReferenceWritableKeyPath<AppearanceManager, String>) -> some View {
-        HStack(spacing: 7) {
-            ColorPicker(title, selection: colorBinding(for: keyPath), supportsOpacity: false)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(Color.dsPaper)
-        }
-    }
-
-    private func colorBinding(for keyPath: ReferenceWritableKeyPath<AppearanceManager, String>) -> Binding<Color> {
-        Binding(
-            get: { Color(nsColor: NSColor(hex: appearance[keyPath: keyPath]) ?? .systemRed) },
-            set: { newColor in
-                if let nsColor = NSColor(newColor).usingColorSpace(.sRGB) {
-                    appearance[keyPath: keyPath] = nsColor.hexRGB
-                }
-            })
     }
 
     private func choiceRow<Value: CaseIterable & Identifiable & RawRepresentable>(
@@ -569,9 +537,14 @@ private struct SuitePrefsFooter: View {
                 .font(.system(size: 9, weight: .medium, design: .monospaced))
                 .kerning(1.0)
                 .foregroundStyle(Color.dsFaint)
-            SuiteUpdateButton()
         }
-        .padding(.top, 4)
+        .padding(.top, 14)
+        .overlay(alignment: .top) {
+            LinearGradient(
+                colors: [.clear, Color.dsPaper.opacity(0.1), Color.dsPaper.opacity(0.1), .clear],
+                startPoint: .leading, endPoint: .trailing)
+                .frame(height: 1)
+        }
     }
 
     private func setLaunchAtLogin(_ enabled: Bool) {
@@ -589,81 +562,6 @@ private struct SuitePrefsFooter: View {
             Log.error("launch at login change failed: \(error.localizedDescription)")
             launchAtLogin = SMAppService.mainApp.status == .enabled
         }
-    }
-}
-
-// Reusable Update control: rebuild from source and relaunch. Drop into any
-// window's footer so a code change lands without leaving the app.
-struct SuiteUpdateButton: View {
-    @StateObject private var updater = SuiteUpdater()
-
-    var body: some View {
-        Button(action: updater.update) {
-            HStack(spacing: 6) {
-                if updater.state == .updating {
-                    ProgressView().controlSize(.small).tint(Color.dsAccent)
-                } else {
-                    Image(systemName: updater.state == .failed
-                          ? "exclamationmark.triangle" : "arrow.triangle.2.circlepath")
-                        .font(.system(size: 11, weight: .semibold))
-                }
-                Text(updater.state == .updating ? "Updating\u{2026}"
-                     : (updater.state == .failed ? "Retry Update" : "Update"))
-            }
-        }
-        .buttonStyle(GhostButtonStyle())
-        .disabled(updater.state == .updating)
-        .help("Rebuild FreeKit from source and relaunch")
-    }
-}
-
-// Rebuilds the working copy via build.sh and relaunches the freshly installed
-// bundle. A personal-tool affordance, so the repo path is fixed to this
-// machine's checkout; if it is missing the button simply reports failure.
-final class SuiteUpdater: ObservableObject {
-    enum State { case idle, updating, failed }
-    @Published var state: State = .idle
-
-    private let repo = "/Users/caden/ClaudeCode/idk/FreeSpeech"
-    private let installed = "/Applications/FreeKit.app"
-
-    func update() {
-        guard state != .updating else { return }
-        guard FileManager.default.fileExists(atPath: repo + "/build.sh") else {
-            Log.error("update: build.sh not found at \(repo)")
-            state = .failed
-            return
-        }
-        state = .updating
-        Log.info("update: rebuilding from \(repo)")
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            guard let self else { return }
-            let task = Process()
-            task.executableURL = URL(fileURLWithPath: "/bin/bash")
-            // Login shell so the Swift/cmake toolchain resolves on PATH the same
-            // way a terminal build does.
-            task.arguments = ["-lc", "cd \(self.repo) && ./build.sh --skip-model"]
-            do {
-                try task.run()
-                task.waitUntilExit()
-            } catch {
-                Log.error("update: could not launch build: \(error.localizedDescription)")
-                DispatchQueue.main.async { self.state = .failed }
-                return
-            }
-            let ok = task.terminationStatus == 0
-            Log.info("update: build exited \(task.terminationStatus)")
-            DispatchQueue.main.async { ok ? self.relaunch() : (self.state = .failed) }
-        }
-    }
-
-    private func relaunch() {
-        let open = Process()
-        open.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-        open.arguments = ["-n", installed]
-        try? open.run()
-        // Let the fresh instance come up before this one exits.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { NSApp.terminate(nil) }
     }
 }
 
@@ -686,6 +584,12 @@ private struct ModuleCard: View {
             HStack(spacing: 14) {
                 Image(systemName: info.symbolName)
                     .font(.system(size: 16, weight: .medium))
+                    // A few symbols (Amphetamine's "pills" among them) default
+                    // to a multicolor palette that ignores foregroundStyle
+                    // unless rendering mode is pinned to monochrome — without
+                    // this it can render with a near-black half regardless of
+                    // the tint below.
+                    .symbolRenderingMode(.monochrome)
                     .foregroundStyle(
                         comingSoon ? Color.dsFaint : (enabled ? Color.dsAccent : Color.dsMuted))
                     .animation(DS.animBase, value: enabled)
@@ -731,8 +635,7 @@ private struct ModuleCard: View {
                                 get: { registry.isEnabled(id: info.id) },
                                 set: { registry.setEnabled($0, id: info.id) }))
                         if info.ownsMenuBarItem {
-                            toggleColumn(
-                                label: "MENU",
+                            menuBarToggleColumn(
                                 isOn: Binding(
                                     get: { registry.showsMenuBarItem(id: info.id) },
                                     set: { registry.setShowsMenuBarItem($0, id: info.id) }))
@@ -812,11 +715,19 @@ private struct ModuleCard: View {
             }
         }
         .background(
-            Color.dsInk1,
-            in: RoundedRectangle(cornerRadius: DS.radiusCard, style: .continuous))
+            ZStack {
+                Color.white.opacity(0.032)
+                DSGrainOverlay(opacity: 0.09)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: DS.radiusCard, style: .continuous)))
         .overlay(
+            // Brighter at the top edge, approximating the reference's inset
+            // top highlight (a raised-card cue) without a custom shape.
             RoundedRectangle(cornerRadius: DS.radiusCard, style: .continuous)
-                .strokeBorder(Color.dsLine, lineWidth: 1))
+                .strokeBorder(
+                    LinearGradient(colors: [Color.white.opacity(0.08), Color.dsLine],
+                                   startPoint: .top, endPoint: .bottom),
+                    lineWidth: 1))
         .opacity(comingSoon ? 0.55 : 1)
         .shadow(color: cardShadowColor, radius: cardShadowRadius, y: cardShadowY)
         .onHover { hovering = $0 }
@@ -836,6 +747,34 @@ private struct ModuleCard: View {
                 .foregroundStyle(Color.dsFaint)
         }
         .frame(minWidth: 44)
+    }
+
+    // Deliberately a different affordance from the ON checkbox: a menu-bar
+    // glyph that tints accent when visible, so "on" vs. "shown in the menu
+    // bar" read as two distinct states at a glance instead of two identical
+    // checkmarks.
+    private func menuBarToggleColumn(isOn: Binding<Bool>) -> some View {
+        Button { isOn.wrappedValue.toggle() } label: {
+            VStack(spacing: 5) {
+                Image(systemName: "menubar.rectangle")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(isOn.wrappedValue ? Color.dsAccent : Color.dsMuted)
+                    .frame(width: 18, height: 18)
+                    .background(
+                        isOn.wrappedValue ? Color.dsAccent.opacity(0.14) : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 5, style: .continuous)
+                            .strokeBorder(isOn.wrappedValue ? Color.dsAccent.opacity(0.4) : Color.dsLine, lineWidth: 1))
+                Text("MENU")
+                    .font(.system(size: 8, weight: .medium, design: .monospaced))
+                    .kerning(0.8)
+                    .foregroundStyle(Color.dsFaint)
+            }
+            .frame(minWidth: 44)
+        }
+        .buttonStyle(.dsPress)
+        .animation(DS.animInstant, value: isOn.wrappedValue)
     }
 
     private var cardShadowColor: Color {

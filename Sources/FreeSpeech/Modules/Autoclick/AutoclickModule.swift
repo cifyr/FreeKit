@@ -640,12 +640,20 @@ private struct AutoclickSettingsPane: View {
             DSSettingsCard(title: "Current run") {
                 HStack(spacing: 12) {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(model.module?.isRunning == true ? "Running" : "Ready")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(model.module?.isRunning == true ? Color.dsAccent : Color.dsPaper)
-                            // Running/Ready and its accent (reserved for live voice) ease in on state change.
-                            .dsContentCrossfade(model.module?.isRunning == true)
-                            .animation(DS.animBase, value: model.module?.isRunning == true)
+                        HStack(spacing: 6) {
+                            if model.module?.isRunning == true {
+                                Circle()
+                                    .fill(Color.dsAccent)
+                                    .frame(width: 6, height: 6)
+                                    .dsLivePulse(true)
+                            }
+                            Text(model.module?.isRunning == true ? "Running" : "Ready")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(model.module?.isRunning == true ? Color.dsAccent : Color.dsPaper)
+                        }
+                        // Running/Ready and its accent (reserved for live voice) ease in on state change.
+                        .dsContentCrossfade(model.module?.isRunning == true)
+                        .animation(DS.animBase, value: model.module?.isRunning == true)
                         Text(runSummary)
                             .font(.system(size: 11))
                             .foregroundStyle(Color.dsFaint)
@@ -653,13 +661,27 @@ private struct AutoclickSettingsPane: View {
                             .dsContentCrossfade(runSummary)
                     }
                     Spacer()
+                    // Stop gets the filled-accent glow (live/on); Start stays a
+                    // quiet ghost button since idle isn't "on" yet.
                     Button {
                         model.module?.toggleClicking()
                     } label: {
-                        Text(model.module?.isRunning == true ? "Stop" : "Start")
-                            .dsContentCrossfade(model.module?.isRunning == true)
+                        let running = model.module?.isRunning == true
+                        Text(running ? "Stop" : "Start")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(Color.dsPaper)
+                            .padding(.horizontal, 14)
+                            .frame(height: 36)
+                            .background(
+                                running ? Color.dsAccent : Color.clear,
+                                in: RoundedRectangle(cornerRadius: DS.radiusControl, style: .continuous))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: DS.radiusControl, style: .continuous)
+                                    .strokeBorder(running ? Color.clear : Color.dsLine, lineWidth: 1))
+                            .shadow(color: running ? Color.dsAccent.opacity(0.32) : .clear, radius: 12)
+                            .dsContentCrossfade(running)
                     }
-                    .buttonStyle(GhostButtonStyle())
+                    .buttonStyle(.dsPress)
                 }
             }
 

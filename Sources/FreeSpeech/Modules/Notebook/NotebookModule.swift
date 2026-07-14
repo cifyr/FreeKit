@@ -849,7 +849,10 @@ struct NotebookView: View {
                 // The accent gradient lives on the top toolbar bar only, not behind
                 // the title or body (which stay plain ink0).
                 .background(AppearanceBackground())
-                Rectangle().fill(Color.dsLine).frame(height: 1)
+                LinearGradient(
+                    colors: [.clear, Color.dsPaper.opacity(0.1), Color.dsPaper.opacity(0.1), .clear],
+                    startPoint: .leading, endPoint: .trailing)
+                    .frame(height: 1)
                 TextField("Untitled", text: $model.editedTitle)
                     .textFieldStyle(.plain)
                     .font(.system(size: 20, weight: .bold))

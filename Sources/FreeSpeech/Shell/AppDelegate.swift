@@ -31,8 +31,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             settings: settings, hub: eventHub, permissionCoach: permissionCoach))
         registry.register(StatsModule(settings: settings))
         registry.register(HyperKeyModule(settings: settings, hub: eventHub))
-        registry.register(IceModule(
-            settings: settings, registry: registry, permissionCoach: permissionCoach))
+        registry.register(DevicesModule())
         registry.register(AppCleanerModule(settings: settings))
         registry.register(BoringNotchModule(registry: registry))
         registry.register(ClopModule(settings: settings, hub: eventHub, dropZoneCoordinator: dropZoneCoordinator))
@@ -40,7 +39,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         registry.register(ConvertModule(
             settings: settings, hub: eventHub, registry: registry, dropZoneCoordinator: dropZoneCoordinator))
         registry.register(AmphetamineModule(settings: settings))
-        for info in [ModuleCatalog.cotypist, ModuleCatalog.linearMouse] {
+        for info in [ModuleCatalog.cotypist, ModuleCatalog.linearMouse, ModuleCatalog.ice] {
             registry.register(PlaceholderModule(info: info))
         }
 

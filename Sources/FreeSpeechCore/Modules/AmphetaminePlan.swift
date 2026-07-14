@@ -71,16 +71,15 @@ public struct AmphetaminePlan: Equatable {
     }
 
     public func vectors() -> Vectors {
+        // Lid-closed mode forces the display-idle assertion on even if the user
+        // left "keep display awake" off: with the lid shut, the idle-display-
+        // sleep timer would otherwise fire on its own, and a display-sleep
+        // transition is exactly what makes loginwindow lock the screen (and
+        // stops video decoding). Holding this assertion is what lets a video keep
+        // playing behind a closed lid without a password prompt on reopen.
         Vectors(systemIdleSleep: true,
-                displayIdleSleep: keepDisplayAwake,
+                displayIdleSleep: keepDisplayAwake || keepAwakeWithLidClosed,
                 clamshellSleep: keepAwakeWithLidClosed)
-    }
-
-    // Closing the lid is a forced sleep, which no IOKit assertion can veto, and
-    // PreventSystemSleep is documented valid only on AC. The one lever that works
-    // is the system-wide SleepDisabled setting, and writing it needs root.
-    public var requiresRootPrivilege: Bool {
-        keepAwakeWithLidClosed
     }
 
     // nil means the session runs until stopped.

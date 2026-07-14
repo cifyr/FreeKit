@@ -36,16 +36,21 @@ final class AmphetaminePlanTests: XCTestCase {
             .vectors().displayIdleSleep)
     }
 
-    // The whole point of the tool: lid-closed is a separate vector from idle sleep,
-    // and it is the only one that costs a privilege.
-    func testClamshellVectorIsTheOnlyOneNeedingRoot() {
-        let idleOnly = AmphetaminePlan(duration: .indefinite, keepAwakeWithLidClosed: false)
-        XCTAssertFalse(idleOnly.vectors().clamshellSleep)
-        XCTAssertFalse(idleOnly.requiresRootPrivilege)
+    func testClamshellVectorFollowsLidClosedToggle() {
+        XCTAssertFalse(AmphetaminePlan(duration: .indefinite, keepAwakeWithLidClosed: false)
+            .vectors().clamshellSleep)
+        XCTAssertTrue(AmphetaminePlan(duration: .indefinite, keepAwakeWithLidClosed: true)
+            .vectors().clamshellSleep)
+    }
 
-        let lidClosed = AmphetaminePlan(duration: .indefinite, keepAwakeWithLidClosed: true)
-        XCTAssertTrue(lidClosed.vectors().clamshellSleep)
-        XCTAssertTrue(lidClosed.requiresRootPrivilege)
+    // Lid-closed must hold the display assertion even with "keep display awake"
+    // off: an idle display-sleep behind a closed lid is what triggers the lock
+    // and stops video, so the two are not independent in that combination.
+    func testLidClosedForcesDisplayAssertionEvenWhenDisplayAwakeIsOff() {
+        let plan = AmphetaminePlan(duration: .indefinite,
+                                   keepDisplayAwake: false,
+                                   keepAwakeWithLidClosed: true)
+        XCTAssertTrue(plan.vectors().displayIdleSleep)
     }
 
     func testRemainingCountsDown() {

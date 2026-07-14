@@ -13,6 +13,22 @@ let package = Package(
             name: "FreeSpeech",
             dependencies: ["FreeSpeechCore", "CWhisper"],
             path: "Sources/FreeSpeech",
+            // Per-module orientation docs, not build inputs — excluded so SPM doesn't warn
+            // about "unhandled" files on every build.
+            exclude: [
+                "Shell/README.md",
+                "Modules/Shared/README.md",
+                "Modules/Speech/README.md",
+                "Modules/Notebook/README.md",
+                "Modules/Convert/README.md",
+                "Modules/Clop/README.md",
+                "Modules/Shelf/README.md",
+                "Modules/BoringNotch/README.md",
+                "Modules/AppCleaner/README.md",
+                "Modules/Autoclick/README.md",
+                "Modules/Stats/README.md",
+                "Modules/CapsLock/README.md",
+            ],
             linkerSettings: [
                 .linkedFramework("AppKit"),
                 .linkedFramework("AVFoundation"),

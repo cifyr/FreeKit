@@ -160,19 +160,20 @@ struct ControlCenterView: View {
         ModuleSettingsCard(module: module)
             .padding(32)
             .transition(.dsAppear)
+        // Sits exactly on the card's corner blob (see CornerBlobCardShape):
+        // the button is a bulge of the sheet, not a separate floating circle.
         Button {
             presenter.dismiss()
         } label: {
             Image(systemName: "chevron.left")
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(Color.dsPaper)
-                .frame(width: 30, height: 30)
-                .background(Color.dsInk2, in: Circle())
-                .overlay(Circle().strokeBorder(Color.dsLine, lineWidth: 1))
+                .frame(width: 36, height: 36)
+                .contentShape(Circle())
         }
         .buttonStyle(.dsPress)
         .help("Back")
-        .padding(14)
+        .offset(x: 16, y: 16)
         .transition(.opacity)
     }
 
@@ -272,12 +273,38 @@ private struct ModuleSettingsCard: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(Color.dsInk1, in: RoundedRectangle(cornerRadius: DS.radiusSheet, style: .continuous))
+        // Content clips to the plain sheet; the fill and the single border
+        // trace the sheet-plus-blob union so the back button's circle reads
+        // as part of the card.
         .clipShape(RoundedRectangle(cornerRadius: DS.radiusSheet, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: DS.radiusSheet, style: .continuous)
-                .strokeBorder(Color.dsLine, lineWidth: 1))
+        .background(Self.blobShape.fill(Color.dsInk1))
+        .overlay(Self.blobShape.stroke(Color.dsLine, lineWidth: 1))
         .shadow(color: .black.opacity(0.4), radius: 26, y: 12)
+    }
+
+    private static var blobShape: CornerBlobCardShape {
+        CornerBlobCardShape(cornerRadius: DS.radiusSheet, blobRadius: 18, blobInset: 2)
+    }
+}
+
+// The settings sheet with the back button's circle grown out of its top-left
+// corner: one path (rounded rect unioned with the corner circle), so both the
+// fill and the border wrap the combined silhouette with no seam between them.
+private struct CornerBlobCardShape: Shape {
+    let cornerRadius: CGFloat
+    let blobRadius: CGFloat
+    // How far the circle's center sits inside the corner; deeper = wider neck.
+    let blobInset: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        let card = CGPath(
+            roundedRect: rect, cornerWidth: cornerRadius, cornerHeight: cornerRadius,
+            transform: nil)
+        let center = CGPoint(x: rect.minX + blobInset, y: rect.minY + blobInset)
+        let blob = CGPath(ellipseIn: CGRect(
+            x: center.x - blobRadius, y: center.y - blobRadius,
+            width: blobRadius * 2, height: blobRadius * 2), transform: nil)
+        return Path(card.union(blob))
     }
 }
 

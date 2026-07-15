@@ -320,15 +320,12 @@ final class NotebookConfig: ObservableObject {
         }
     }
 
-    // Space after each Return so paragraphs breathe, via paragraphSpacing rather
-    // than lineSpacing/lineHeightMultiple. Those grow every line fragment and the
-    // TextKit-2 caret is drawn at fragment height, so they stretch the cursor;
-    // paragraphSpacing adds the gap between paragraphs only, leaving wrapped lines
-    // tight and the default caret at its natural text height — no custom caret.
+    // No extra line/paragraph spacing. On macOS 26 the caret is the system text
+    // insertion indicator, drawn at the line-fragment height and not resizable
+    // independently, so ANY lineSpacing or paragraphSpacing stretches it taller
+    // than the text. Default line height keeps the caret at text height.
     static func bodyParagraphStyle(fontSize: CGFloat) -> NSMutableParagraphStyle {
-        let style = NSMutableParagraphStyle()
-        style.paragraphSpacing = (fontSize * 0.9).rounded()
-        return style
+        NSMutableParagraphStyle()
     }
 
     var bodyAttributes: [NSAttributedString.Key: Any] {
@@ -1760,7 +1757,6 @@ final class RichTextEditorProxy: ObservableObject {
         let style = NSMutableParagraphStyle()
         style.headIndent = allBulleted ? 0 : 18
         style.defaultTabInterval = 18
-        style.paragraphSpacing = (((tv.typingAttributes[.font] as? NSFont)?.pointSize ?? 13) * 0.9).rounded()
         if let first = paragraphStarts.first {
             // Marker edits shifted everything after the first paragraph start;
             // recompute the affected span before styling it.

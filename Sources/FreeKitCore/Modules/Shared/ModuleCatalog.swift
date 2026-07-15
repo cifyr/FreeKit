@@ -48,7 +48,7 @@ public enum ModuleCatalog {
 
     public static let stats = ModuleInfo(
         id: "stats", displayName: "Stats",
-        summary: "Live CPU, memory, network throughput, and Bluetooth battery in the menu bar.",
+        summary: "Live CPU, memory, GPU, disk, network, and battery in the menu bar, with per-metric styles and colors.",
         symbolName: "gauge.with.dots.needle.50percent", status: .available, ownsMenuBarItem: true)
 
     // Display name is HyperKey; the persisted id stays "capslock" so existing

@@ -320,10 +320,20 @@ final class NotebookConfig: ObservableObject {
         }
     }
 
+    // 1.5 line height so typed lines (and each new paragraph on return) breathe.
+    static let lineHeightMultiple: CGFloat = 1.5
+
+    static func bodyParagraphStyle() -> NSMutableParagraphStyle {
+        let style = NSMutableParagraphStyle()
+        style.lineHeightMultiple = lineHeightMultiple
+        return style
+    }
+
     var bodyAttributes: [NSAttributedString.Key: Any] {
         [
             .font: font(size: fontSize),
             .foregroundColor: NB.ink,
+            .paragraphStyle: Self.bodyParagraphStyle(),
         ]
     }
 }
@@ -966,8 +976,8 @@ struct NotebookView: View {
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(NB.inkC)
                         .padding(.horizontal, 72)
-                        .padding(.top, 9)
-                        .padding(.bottom, 8)
+                        .padding(.top, 5)
+                        .padding(.bottom, 6)
                     RichTextEditor(model: model, proxy: editor)
                     Rectangle().fill(NB.hairlineC).frame(height: 1)
                     GeometryReader { geo in
@@ -1707,7 +1717,7 @@ final class RichTextEditorProxy: ObservableObject {
         var attrs = tv.typingAttributes
         attrs[.font] = bodyFont
         attrs[.foregroundColor] = NB.ink
-        attrs[.paragraphStyle] = NSParagraphStyle.default
+        attrs[.paragraphStyle] = NotebookConfig.bodyParagraphStyle()
         tv.typingAttributes = attrs
         tv.didChangeText()
     }
@@ -1748,6 +1758,7 @@ final class RichTextEditorProxy: ObservableObject {
         let style = NSMutableParagraphStyle()
         style.headIndent = allBulleted ? 0 : 18
         style.defaultTabInterval = 18
+        style.lineHeightMultiple = NotebookConfig.lineHeightMultiple
         if let first = paragraphStarts.first {
             // Marker edits shifted everything after the first paragraph start;
             // recompute the affected span before styling it.

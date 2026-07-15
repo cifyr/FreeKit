@@ -4,6 +4,33 @@ import SwiftUI
 import UniformTypeIdentifiers
 import FreeKitCore
 
+// The note panel is the suite's one light surface: a clean near-white sheet with
+// ink text and crimson accents, deliberately apart from the dark control center
+// that configures it. Scoped here so the rest of the suite's dark DS is untouched.
+private enum NB {
+    static let surface = NSColor(srgbRed: 0.988, green: 0.988, blue: 0.984, alpha: 1)   // FCFCFB
+    static let bar = NSColor(srgbRed: 0.965, green: 0.965, blue: 0.957, alpha: 1)        // F6F6F4
+    static let ink = NSColor(srgbRed: 0.102, green: 0.102, blue: 0.102, alpha: 1)        // 1A1A1A
+    static let muted = NSColor(srgbRed: 0.42, green: 0.42, blue: 0.42, alpha: 1)         // 6B6B6B
+    static let faint = NSColor(srgbRed: 0.62, green: 0.62, blue: 0.62, alpha: 1)         // 9E9E9E
+    static let hairline = NSColor(srgbRed: 0.914, green: 0.914, blue: 0.906, alpha: 1)   // E9E9E7
+    static let field = NSColor(srgbRed: 0.945, green: 0.945, blue: 0.937, alpha: 1)      // F1F1EF
+    static let divider = NSColor(srgbRed: 0.84, green: 0.84, blue: 0.83, alpha: 1)       // D6D6D3
+    static let accent = DS.accent
+    static let selection = DS.accent.withAlphaComponent(0.16)
+
+    static let surfaceC = Color(nsColor: surface)
+    static let barC = Color(nsColor: bar)
+    static let inkC = Color(nsColor: ink)
+    static let mutedC = Color(nsColor: muted)
+    static let faintC = Color(nsColor: faint)
+    static let hairlineC = Color(nsColor: hairline)
+    static let fieldC = Color(nsColor: field)
+    static let accentC = Color(nsColor: DS.accent)
+    static let hoverC = Color.black.opacity(0.05)
+    static let selectionC = Color(nsColor: DS.accent).opacity(0.12)
+}
+
 // Notebook: a floating note panel toggled by a global hotkey. Notes persist as
 // RTF (round-trips bold/color/headings/bullets and stays readable by other
 // apps) with a plain-text shadow for search, one file per note via NotebookStore.
@@ -256,7 +283,7 @@ final class NotebookConfig: ObservableObject {
     var bodyAttributes: [NSAttributedString.Key: Any] {
         [
             .font: font(size: fontSize),
-            .foregroundColor: DS.paper,
+            .foregroundColor: NB.ink,
         ]
     }
 }
@@ -321,14 +348,22 @@ final class NotebookPanelController {
     }
 
     private func focus() {
-        if let panel { DSMotionAppKit.presentWindow(panel) }
+        if let panel {
+            // Re-assert the float level and force it frontmost: as a background
+            // agent app, makeKeyAndOrderFront alone doesn't reliably raise the
+            // panel above the currently-active app's windows.
+            panel.level = config.floatOnTop ? .floating : .normal
+            DSMotionAppKit.presentWindow(panel)
+            panel.orderFrontRegardless()
+        }
         NSApp.activate(ignoringOtherApps: true)
         model.focusEditor()
     }
 
     private func buildIfNeeded() {
         guard panel == nil else { return }
-        let hosting = NSHostingController(rootView: NotebookView(model: model, config: config))
+        let hosting = NSHostingController(
+            rootView: NotebookView(model: model, config: config, onClose: { [weak self] in self?.hide() }))
         // A titled, floating panel: stays over normal windows for quick capture.
         // fullScreenAuxiliary lets it also surface over another app's full-screen
         // Space (e.g. jotting a note while a video plays full-screen) without the
@@ -338,8 +373,8 @@ final class NotebookPanelController {
         p.title = "Notebook"
         p.titlebarAppearsTransparent = true
         p.titleVisibility = .hidden
-        p.appearance = NSAppearance(named: .darkAqua)
-        p.backgroundColor = DS.ink0
+        p.appearance = NSAppearance(named: .aqua)
+        p.backgroundColor = NB.surface
         p.level = config.floatOnTop ? .floating : .normal
         p.collectionBehavior = config.floatOnTop ? [.canJoinAllSpaces, .fullScreenAuxiliary] : []
         p.hidesOnDeactivate = false
@@ -749,12 +784,13 @@ final class NotebookViewModel: ObservableObject {
         return (title, normalizedForImport(content, config: config))
     }
 
-    // Notes renders on white, this editor on ink: near-paper text exports as
-    // default (black-on-white) ink, and near-black imports become DS.paper —
-    // deliberate colors (reds, blues) pass through untouched.
+    // Both Notes and this editor now render dark-on-light, so text mostly passes
+    // through: on export, our near-ink body drops its explicit color so Notes
+    // uses its own default black; on import, absent or near-white (invisible-on-
+    // light) text is coerced to ink. Deliberate colors (reds, blues) pass through.
     private static func normalizedForExport(_ text: NSAttributedString) -> NSAttributedString {
         recolor(text) { color in
-            brightness(of: color).map { $0 > 0.85 ? nil : color } ?? color
+            brightness(of: color).map { $0 < 0.2 ? nil : color } ?? color
         }
     }
 
@@ -766,8 +802,8 @@ final class NotebookViewModel: ObservableObject {
         result.enumerateAttribute(.foregroundColor, in: range) { value, sub, _ in
             let color = value as? NSColor
             let bright = color.flatMap(brightness(of:))
-            if color == nil || (bright ?? 0) < 0.2 {
-                result.addAttribute(.foregroundColor, value: DS.paper, range: sub)
+            if color == nil || (bright ?? 1) > 0.8 {
+                result.addAttribute(.foregroundColor, value: NB.ink, range: sub)
             }
         }
         // Notes' typefaces never enter the notebook: everything lands in this
@@ -811,6 +847,8 @@ final class NotebookViewModel: ObservableObject {
 struct NotebookView: View {
     @ObservedObject var model: NotebookViewModel
     @ObservedObject var config: NotebookConfig
+    let onClose: () -> Void
+    @Environment(\.controlActiveState) private var controlActiveState
     @ObservedObject private var appearance = AppearanceManager.shared
     @StateObject private var editor = RichTextEditorProxy()
 
@@ -823,7 +861,7 @@ struct NotebookView: View {
     // Content colors are user data, not interface chrome, so the palette here
     // deliberately goes beyond the DS accent (Google-Docs-style choice).
     private static let textColors: [(NSColor, String)] = [
-        (DS.paper, "Paper"), (DS.muted, "Muted"), (.systemGray, "Gray"),
+        (NB.ink, "Default"), (NB.muted, "Muted"), (.systemGray, "Gray"),
         (DS.accent, "Red"), (.systemOrange, "Orange"), (.systemYellow, "Yellow"),
         (.systemGreen, "Green"), (.systemMint, "Mint"), (.systemTeal, "Teal"),
         (.systemBlue, "Blue"), (.systemIndigo, "Indigo"), (.systemPurple, "Purple"),
@@ -850,32 +888,31 @@ struct NotebookView: View {
         HStack(spacing: 0) {
             if config.sidebarVisible {
                 sidebar
-                Rectangle().fill(Color.dsLine).frame(width: 1)
+                Rectangle().fill(NB.hairlineC).frame(width: 1)
             }
 
             VStack(alignment: .leading, spacing: 0) {
-                GeometryReader { geo in
-                    toolbar(width: geo.size.width)
-                }
-                .frame(height: 40)
-                // The accent gradient lives on the top toolbar bar only, not behind
-                // the title or body (which stay plain ink0).
-                .background(AppearanceBackground())
-                LinearGradient(
-                    colors: [.clear, Color.dsPaper.opacity(0.1), Color.dsPaper.opacity(0.1), .clear],
-                    startPoint: .leading, endPoint: .trailing)
-                    .frame(height: 1)
+                // Centered so it clears the (left-hung) traffic lights; doubles as
+                // the panel's title the way the reference app's header reads.
                 TextField("Untitled", text: $model.editedTitle)
                     .textFieldStyle(.plain)
-                    .font(.system(size: 20, weight: .bold))
-                    .foregroundStyle(Color.dsPaper)
-                    .padding(.horizontal, 18)
-                    .padding(.top, 12)
-                    .padding(.bottom, 2)
+                    .multilineTextAlignment(.center)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(NB.inkC)
+                    .padding(.horizontal, 72)
+                    .padding(.top, 9)
+                    .padding(.bottom, 8)
+                    .background(NB.surfaceC.gesture(WindowDragGesture()))
                 RichTextEditor(model: model, proxy: editor)
+                Rectangle().fill(NB.hairlineC).frame(height: 1)
+                GeometryReader { geo in
+                    bottomBar(width: geo.size.width)
+                }
+                .frame(height: 46)
+                .background(NB.barC.gesture(WindowDragGesture()))
             }
         }
-        .background(Color.dsInk0.gesture(WindowDragGesture()))
+        .background(NB.surfaceC)
         .frame(minWidth: 480, minHeight: 340)
         .animation(DS.animBase, value: config.sidebarVisible)
         .onChange(of: config.sortOrder) { _, _ in model.refresh() }
@@ -886,20 +923,20 @@ struct NotebookView: View {
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(Color.dsFaint)
+                    .foregroundStyle(NB.faintC)
                 TextField("Search notes", text: $model.query)
                     .textFieldStyle(.plain)
                     .font(.system(size: 12))
-                    .foregroundStyle(Color.dsPaper)
+                    .foregroundStyle(NB.inkC)
             }
             .padding(.horizontal, 10)
             .frame(height: 32)
             .background(
-                Color.dsInk2,
+                NB.fieldC,
                 in: RoundedRectangle(cornerRadius: DS.radiusControl, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: DS.radiusControl, style: .continuous)
-                    .strokeBorder(Color.dsLine, lineWidth: 1))
+                    .strokeBorder(NB.hairlineC, lineWidth: 1))
 
             ScrollView {
                 LazyVStack(spacing: 4) {
@@ -919,12 +956,19 @@ struct NotebookView: View {
                 }
             }
 
-            Button("New Note") { model.newNote() }
-                .buttonStyle(GhostButtonStyle())
-                .frame(maxWidth: .infinity)
+            Button(action: { model.newNote() }) {
+                Text("New Note")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(NB.accentC)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 7)
+                    .background(NB.fieldC, in: RoundedRectangle(cornerRadius: DS.radiusControl, style: .continuous))
+            }
+            .buttonStyle(.plain)
         }
         .padding(12)
         .frame(width: config.sidebarWidth)
+        .background(NB.surfaceC)
     }
 
     // MARK: Adaptive one-line toolbar
@@ -954,13 +998,13 @@ struct NotebookView: View {
             }
         }
 
-        // Button width 28 + 6 spacing, plus the leading divider.
+        // Button width 30 + 4 spacing, plus the leading divider.
         var width: CGFloat { CGFloat(buttonCount) * 34 + 13 }
     }
 
     private func visibleGroups(width: CGFloat) -> Set<ToolGroup> {
-        // Fixed occupants: padding, sidebar toggle, image button, gear, overflow slot.
-        var budget = width - 28 - 34 - 34 - 34 - 34
+        // Fixed occupants: padding + sidebar, image, overflow, close, gear slots.
+        var budget = width - 24 - 34 * 5
         var kept: Set<ToolGroup> = []
         for group in ToolGroup.allCases.sorted(by: { $0.keepPriority < $1.keepPriority }) {
             if budget >= group.width {
@@ -971,29 +1015,40 @@ struct NotebookView: View {
         return kept
     }
 
-    private func toolbar(width: CGFloat) -> some View {
+    private func bottomBar(width: CGFloat) -> some View {
         let visible = visibleGroups(width: width)
         let hidden = ToolGroup.allCases.filter { !visible.contains($0) }
-        return HStack(spacing: 6) {
+        return HStack(spacing: 4) {
             formatButton("sidebar.left", help: config.sidebarVisible ? "Hide sidebar" : "Show sidebar") {
                 config.sidebarVisible.toggle()
             }
             formatButton("photo", help: "Insert image") { editor.insertImageFromPanel() }
             ForEach(ToolGroup.allCases.filter { visible.contains($0) }, id: \.self) { group in
-                Rectangle().fill(Color.dsLine).frame(width: 1, height: 16)
+                barDivider
                 inlineGroup(group)
             }
             Spacer(minLength: 4)
             if !hidden.isEmpty {
                 formatButton("ellipsis", help: "More tools") { showOverflow.toggle() }
-                    .popover(isPresented: $showOverflow, arrowEdge: .bottom) {
+                    .popover(isPresented: $showOverflow, arrowEdge: .top) {
                         overflowPanel(groups: hidden)
                     }
             }
+            // Only offer close once the panel is focused; while it floats over
+            // another app there's nothing to "close into", matching the reference.
+            if controlActiveState != .inactive {
+                barDivider
+                formatButton("xmark", help: "Close notebook") { onClose() }
+            }
+            barDivider
             formatButton("gearshape", help: "Notebook settings") { model.openSettings() }
         }
-        .padding(.horizontal, 14)
-        .frame(height: 40)
+        .padding(.horizontal, 12)
+        .frame(height: 46)
+    }
+
+    private var barDivider: some View {
+        Rectangle().fill(NB.hairlineC).frame(width: 1, height: 18)
     }
 
     @ViewBuilder private func inlineGroup(_ group: ToolGroup) -> some View {
@@ -1004,19 +1059,19 @@ struct NotebookView: View {
             styleButtons
         case .colorTools:
             formatButton("paintbrush.pointed", help: "Text color") { showTextColors.toggle() }
-                .popover(isPresented: $showTextColors, arrowEdge: .bottom) {
+                .popover(isPresented: $showTextColors, arrowEdge: .top) {
                     colorGrid(Self.textColors, clearTitle: nil) { color in
-                        editor.applyColor(color ?? DS.paper)
+                        editor.applyColor(color ?? NB.ink)
                     }
                 }
             formatButton("highlighter", help: "Highlight") { showHighlights.toggle() }
-                .popover(isPresented: $showHighlights, arrowEdge: .bottom) {
+                .popover(isPresented: $showHighlights, arrowEdge: .top) {
                     colorGrid(Self.highlightColors, clearTitle: "None") { color in
                         editor.applyHighlight(color)
                     }
                 }
             formatButton("textformat.size.smaller", help: "Text size") { showSizes.toggle() }
-                .popover(isPresented: $showSizes, arrowEdge: .bottom) {
+                .popover(isPresented: $showSizes, arrowEdge: .top) {
                     sizeList { showSizes = false }
                 }
         case .lists:
@@ -1041,32 +1096,32 @@ struct NotebookView: View {
                         Text("TEXT COLOR")
                             .font(.system(size: 9, weight: .medium, design: .monospaced))
                             .kerning(1.0)
-                            .foregroundStyle(Color.dsFaint)
-                        swatchRow(Self.textColors) { editor.applyColor($0 ?? DS.paper) }
+                            .foregroundStyle(NB.faintC)
+                        swatchRow(Self.textColors) { editor.applyColor($0 ?? NB.ink) }
                         Text("HIGHLIGHT")
                             .font(.system(size: 9, weight: .medium, design: .monospaced))
                             .kerning(1.0)
-                            .foregroundStyle(Color.dsFaint)
+                            .foregroundStyle(NB.faintC)
                         HStack(spacing: 6) {
                             swatchRow(Self.highlightColors) { editor.applyHighlight($0) }
                             Button("None") { editor.applyHighlight(nil) }
                                 .buttonStyle(.plain)
                                 .font(.system(size: 11, weight: .semibold))
-                                .foregroundStyle(Color.dsMuted)
+                                .foregroundStyle(NB.mutedC)
                         }
                         Text("SIZE")
                             .font(.system(size: 9, weight: .medium, design: .monospaced))
                             .kerning(1.0)
-                            .foregroundStyle(Color.dsFaint)
+                            .foregroundStyle(NB.faintC)
                         HStack(spacing: 4) {
                             ForEach(Self.fontSizes, id: \.self) { size in
                                 Button("\(Int(size))") { editor.applyFontSize(size) }
                                     .buttonStyle(.plain)
                                     .font(.system(size: 11, design: .monospaced))
-                                    .foregroundStyle(Color.dsPaper)
+                                    .foregroundStyle(NB.inkC)
                                     .padding(.horizontal, 5)
                                     .padding(.vertical, 3)
-                                    .background(Color.dsInk2, in: RoundedRectangle(cornerRadius: 5))
+                                    .background(NB.fieldC, in: RoundedRectangle(cornerRadius: 5))
                             }
                         }
                     }
@@ -1078,7 +1133,7 @@ struct NotebookView: View {
             }
         }
         .padding(12)
-        .background(Color.dsInk1)
+        .background(NB.barC)
     }
 
     @ViewBuilder private var headingButtons: some View {
@@ -1123,7 +1178,7 @@ struct NotebookView: View {
                     Circle()
                         .fill(Color(nsColor: entry.0))
                         .frame(width: 16, height: 16)
-                        .overlay(Circle().strokeBorder(Color.dsLine, lineWidth: 1))
+                        .overlay(Circle().strokeBorder(NB.hairlineC, lineWidth: 1))
                 }
                 .buttonStyle(.plain)
                 .help(entry.1)
@@ -1143,19 +1198,26 @@ struct NotebookView: View {
                         Circle()
                             .fill(Color(nsColor: entry.0))
                             .frame(width: 20, height: 20)
-                            .overlay(Circle().strokeBorder(Color.dsLine, lineWidth: 1))
+                            .overlay(Circle().strokeBorder(NB.hairlineC, lineWidth: 1))
                     }
                     .buttonStyle(.plain)
                     .help(entry.1)
                 }
             }
             if let clearTitle {
-                Button(clearTitle) { onPick(nil) }
-                    .buttonStyle(GhostButtonStyle())
+                Button(action: { onPick(nil) }) {
+                    Text(clearTitle)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(NB.mutedC)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 6)
+                        .background(NB.fieldC, in: RoundedRectangle(cornerRadius: DS.radiusControl, style: .continuous))
+                }
+                .buttonStyle(.plain)
             }
         }
         .padding(12)
-        .background(Color.dsInk1)
+        .background(NB.barC)
     }
 
     private func sizeList(onPick: @escaping () -> Void) -> some View {
@@ -1167,7 +1229,7 @@ struct NotebookView: View {
                 } label: {
                     Text("\(Int(size)) pt")
                         .font(.system(size: 12, design: .monospaced))
-                        .foregroundStyle(Color.dsPaper)
+                        .foregroundStyle(NB.inkC)
                         .frame(width: 64, alignment: .leading)
                         .padding(.vertical, 3)
                         .padding(.horizontal, 8)
@@ -1176,23 +1238,35 @@ struct NotebookView: View {
             }
         }
         .padding(8)
-        .background(Color.dsInk1)
+        .background(NB.barC)
     }
 
     private func formatButton(_ symbol: String, help: String, action: @escaping () -> Void) -> some View {
+        BarButton(symbol: symbol, help: help, action: action)
+    }
+}
+
+// Borderless bottom-bar glyph: a plain muted icon with a soft hover fill, in
+// place of the dark suite's bordered keycap chips.
+private struct BarButton: View {
+    let symbol: String
+    let help: String
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
         Button(action: action) {
             Image(systemName: symbol)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(Color.dsPaper)
-                .frame(width: 28, height: 26)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(NB.mutedC)
+                .frame(width: 30, height: 28)
                 .background(
-                    Color.dsInk2,
-                    in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .strokeBorder(Color.dsLine, lineWidth: 1))
+                    hovering ? NB.hoverC : Color.clear,
+                    in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         }
         .buttonStyle(.plain)
+        .onHover { hovering = $0 }
         .help(help)
     }
 }
@@ -1214,37 +1288,37 @@ private struct NoteRow: View {
                 HStack {
                     Text(note.title.isEmpty ? "Untitled" : note.title)
                         .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(selected ? Color.dsAccent : Color.dsPaper)
+                        .foregroundStyle(selected ? NB.accentC : NB.inkC)
                         .lineLimit(1)
                     Spacer()
                     if hovering {
                         Button(action: onDelete) {
                             Image(systemName: "trash")
                                 .font(.system(size: 10))
-                                .foregroundStyle(Color.dsMuted)
+                                .foregroundStyle(NB.mutedC)
                         }
-                        .buttonStyle(.dsPress)
+                        .buttonStyle(.plain)
                         .transition(.opacity)
                     }
                 }
                 if showPreview, !preview.isEmpty {
                     Text(preview)
                         .font(.system(size: 10))
-                        .foregroundStyle(Color.dsMuted)
+                        .foregroundStyle(NB.mutedC)
                         .lineLimit(density == .compact ? 1 : 2)
                 }
                 if showTimestamp {
                     Text(timeFormatter.string(from: note.modified).uppercased())
                         .font(.system(size: 9, weight: .medium, design: .monospaced))
                         .kerning(0.8)
-                        .foregroundStyle(Color.dsFaint)
+                        .foregroundStyle(NB.faintC)
                 }
             }
             .padding(.horizontal, 10)
             .padding(.vertical, density == .compact ? 5 : 8)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
-                selected ? Color.dsInk2 : (hovering ? Color.dsInk1 : Color.clear),
+                selected ? NB.selectionC : (hovering ? NB.hoverC : Color.clear),
                 in: RoundedRectangle(cornerRadius: DS.radiusKeycap, style: .continuous))
         }
         .buttonStyle(.plain)
@@ -1546,7 +1620,7 @@ final class RichTextEditorProxy: ObservableObject {
         table.numberOfColumns = 1
         let block = NSTextTableBlock(
             table: table, startingRow: 0, rowSpan: 1, startingColumn: 0, columnSpan: 1)
-        block.setBorderColor(DS.faint)
+        block.setBorderColor(NB.divider)
         block.setWidth(0, type: .absoluteValueType, for: .border)
         block.setWidth(1, type: .absoluteValueType, for: .border, edge: .maxY)
         block.setWidth(3, type: .absoluteValueType, for: .padding)
@@ -1567,7 +1641,7 @@ final class RichTextEditorProxy: ObservableObject {
         // Typing after a split starts fresh body text outside the table block.
         var attrs = tv.typingAttributes
         attrs[.font] = bodyFont
-        attrs[.foregroundColor] = DS.paper
+        attrs[.foregroundColor] = NB.ink
         attrs[.paragraphStyle] = NSParagraphStyle.default
         tv.typingAttributes = attrs
         tv.didChangeText()
@@ -1737,15 +1811,15 @@ struct RichTextEditor: NSViewRepresentable {
         tv.allowsUndo = true
         tv.usesFindBar = true
         tv.drawsBackground = true
-        tv.backgroundColor = DS.ink0
-        tv.insertionPointColor = DS.accent
-        tv.textContainerInset = NSSize(width: 14, height: 12)
+        tv.backgroundColor = NB.surface
+        tv.insertionPointColor = NB.accent
+        tv.textContainerInset = NSSize(width: 18, height: 14)
         tv.typingAttributes = model.config.bodyAttributes
         tv.isContinuousSpellCheckingEnabled = model.config.spellCheck
         tv.isAutomaticQuoteSubstitutionEnabled = model.config.smartQuotes
-        tv.selectedTextAttributes = [.backgroundColor: DS.ink3]
+        tv.selectedTextAttributes = [.backgroundColor: NB.selection]
         scroll.drawsBackground = true
-        scroll.backgroundColor = DS.ink0
+        scroll.backgroundColor = NB.surface
         proxy.textView = tv
         model.editorTextView = tv
         context.coordinator.textView = tv

@@ -63,19 +63,34 @@ Coming soon: **Ice** (menu bar icon manager), **Cotypist** (on-device inline tex
 
 ## Download & install
 
+### Homebrew (recommended)
+
+```bash
+brew tap cifyr/freekit
+brew install --cask --no-quarantine freekit
+```
+
+`--no-quarantine` is needed because the app is self-signed rather than notarized;
+Gatekeeper would otherwise block first launch. Upgrade with
+`brew upgrade --cask freekit`, remove everything with
+`brew uninstall --zap --cask freekit`. Setting up the tap (and the notarization
+path that drops the flag) is documented in **[HOMEBREW.md](HOMEBREW.md)**.
+
+### Direct download
+
 Grab the [latest release](https://github.com/cifyr/FreeKit/releases/latest):
 
-- **[FreeSpeech.zip](https://github.com/cifyr/FreeKit/releases/latest/download/FreeSpeech.zip)** — 510 MB, model included, works offline immediately.
-- **[FreeSpeech-lite.zip](https://github.com/cifyr/FreeKit/releases/latest/download/FreeSpeech-lite.zip)** — 4 MB; downloads the model once on first launch.
+- **FreeKit-share.zip** — model included, works offline immediately.
+- **FreeKit-share-lite.zip** — a few MB; downloads the model once on first launch.
 
 Then (see **[INSTALL.md](INSTALL.md)** for detail):
 
 1. Unzip the file.
 2. **Right-click** `install.command` → **Open** (approve the one-time unidentified-developer prompt).
-3. Grant **Microphone** and **Accessibility** when the setup guide asks.
-4. Hold **Right Option** and talk.
+3. Grant the permissions the setup guide asks for, then turn on the tools you want.
 
-The app isn't notarized, so the right-click-Open step is required (a plain double-click is blocked by Gatekeeper). Everything runs on-device.
+The app isn't notarized, so the right-click-Open step (or Homebrew's `--no-quarantine`)
+is required — a plain double-click is blocked by Gatekeeper. Everything runs on-device.
 
 ## Build from source
 

@@ -17,17 +17,19 @@ If your Mac is Intel-based or on an older macOS, it will not run.
    - This is expected: the app isn't signed through the App Store. It's safe — it runs entirely on your machine.
 3. The installer copies the app to your Applications folder, installs the speech model
    (or, for the small download, fetches it on first launch — needs internet once), and opens the app.
-4. On first launch, a **setup guide** walks you through granting two permissions:
-   - **Microphone** — to hear your voice.
-   - **Accessibility** — to type the transcribed text into whatever app you're using.
-   Both are required. Follow the steps; the guide updates automatically once you grant them in System Settings.
+4. On first launch, a **setup guide** walks you through the permissions the suite can use —
+   **Accessibility**, **Microphone**, **Screen Recording**, and **Camera**, each explaining what
+   it's for — then helps you turn on the tools you want, one at a time, and set their hotkeys.
+   Everything starts off; you enable only what you use. The guide updates automatically as you
+   grant permissions in System Settings.
 
 ## Using it
 
-- **Hold Right Option** and speak, then release — your words are inserted wherever your cursor is.
-- FreeKit lives in the **Dock**, with optional per-tool menu bar controls for settings, models, and the
-  separate hotkey that transcribes system audio (e.g. the other side of a call).
-- Change the hotkey, model, and vocabulary anytime in **Settings**.
+- Open **FreeKit** and turn on the tools you want from **Control Center** (the setup guide does this too).
+- **Speech**: once enabled, hold your dictation hotkey (**Right Option** by default) and speak, then
+  release — your words are inserted wherever the cursor is. A separate hotkey transcribes system audio
+  (e.g. the other side of a call).
+- Each tool keeps its own **Settings** — change hotkeys, models, vocabulary, and options there anytime.
 
 ## Troubleshooting
 

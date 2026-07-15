@@ -1877,8 +1877,17 @@ final class NotebookTextView: NSTextView {
     override func drawInsertionPoint(in rect: NSRect, color: NSColor, turnedOn flag: Bool) {
         var r = rect
         let font = (typingAttributes[.font] as? NSFont) ?? .systemFont(ofSize: 13)
-        let textHeight = ceil(font.ascender - font.descender)
-        if textHeight > 0, textHeight < r.height { r.size.height = textHeight }
+        // Anchor the caret to the glyph box (cap top → descender), not the line
+        // fragment top: the fragment includes leading above the caps and the
+        // lineSpacing gap below, both of which made the caret read as too tall
+        // and floating above the text. Glyphs sit at the fragment top.
+        let capTopInset = max(0, font.ascender - font.capHeight)
+        let caretHeight = ceil(font.capHeight - font.descender)
+        if caretHeight > 0, caretHeight + capTopInset <= r.height {
+            r.origin.y = rect.origin.y + capTopInset
+            r.size.height = caretHeight
+        }
+        r.size.width = 2  // Raycast-ish weight; 1pt read as too thin.
         super.drawInsertionPoint(in: r, color: color, turnedOn: flag)
     }
 }

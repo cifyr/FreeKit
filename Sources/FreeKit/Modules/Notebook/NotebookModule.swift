@@ -626,9 +626,29 @@ final class NotebookViewModel: ObservableObject {
     private func attributedText(from note: Note) -> NSAttributedString {
         if let rich = note.rich,
            let text = NotebookRichText.attributedString(from: rich) {
-            return text
+            return Self.strippingLineSpacing(text)
         }
         return NSAttributedString(string: note.plainText, attributes: config.bodyAttributes)
+    }
+
+    // Notes saved by earlier builds baked lineSpacing/paragraphSpacing into their
+    // paragraph styles, which inflates the macOS caret on load. Zero those out so
+    // old notes get the same text-height caret as new ones (re-saved on next edit).
+    private static func strippingLineSpacing(_ text: NSAttributedString) -> NSAttributedString {
+        let result = NSMutableAttributedString(attributedString: text)
+        let full = NSRange(location: 0, length: result.length)
+        result.enumerateAttribute(.paragraphStyle, in: full) { value, range, _ in
+            guard let style = (value as? NSParagraphStyle)?.mutableCopy() as? NSMutableParagraphStyle,
+                  style.lineSpacing != 0 || style.paragraphSpacing != 0
+                    || style.paragraphSpacingBefore != 0 || style.lineHeightMultiple != 0
+            else { return }
+            style.lineSpacing = 0
+            style.paragraphSpacing = 0
+            style.paragraphSpacingBefore = 0
+            style.lineHeightMultiple = 0
+            result.addAttribute(.paragraphStyle, value: style, range: range)
+        }
+        return result
     }
 
     // MARK: - Apple Notes sync

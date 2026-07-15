@@ -8,14 +8,16 @@ import FreeKitCore
 // ink text and crimson accents, deliberately apart from the dark control center
 // that configures it. Scoped here so the rest of the suite's dark DS is untouched.
 private enum NB {
-    static let surface = NSColor(srgbRed: 0.988, green: 0.988, blue: 0.984, alpha: 1)   // FCFCFB
-    static let bar = NSColor(srgbRed: 0.965, green: 0.965, blue: 0.957, alpha: 1)        // F6F6F4
-    static let ink = NSColor(srgbRed: 0.102, green: 0.102, blue: 0.102, alpha: 1)        // 1A1A1A
+    // Warm off-white house palette; the sheet itself is translucent (see
+    // NotebookBackground) so these read as tints over a frosted wash, not solids.
+    static let surface = NSColor(srgbRed: 0.961, green: 0.961, blue: 0.941, alpha: 1)   // F5F5F0
+    static let bar = NSColor(srgbRed: 0.925, green: 0.925, blue: 0.902, alpha: 1)        // ECECE6
+    static let ink = NSColor(srgbRed: 0.090, green: 0.090, blue: 0.090, alpha: 1)        // 171717
     static let muted = NSColor(srgbRed: 0.42, green: 0.42, blue: 0.42, alpha: 1)         // 6B6B6B
-    static let faint = NSColor(srgbRed: 0.62, green: 0.62, blue: 0.62, alpha: 1)         // 9E9E9E
-    static let hairline = NSColor(srgbRed: 0.914, green: 0.914, blue: 0.906, alpha: 1)   // E9E9E7
-    static let field = NSColor(srgbRed: 0.945, green: 0.945, blue: 0.937, alpha: 1)      // F1F1EF
-    static let divider = NSColor(srgbRed: 0.84, green: 0.84, blue: 0.83, alpha: 1)       // D6D6D3
+    static let faint = NSColor(srgbRed: 0.58, green: 0.57, blue: 0.55, alpha: 1)         // 949188
+    static let hairline = NSColor(srgbRed: 0.902, green: 0.890, blue: 0.882, alpha: 1)   // E6E3E1
+    static let field = NSColor(srgbRed: 0.929, green: 0.929, blue: 0.902, alpha: 1)      // EDEDE6
+    static let divider = NSColor(srgbRed: 0.82, green: 0.81, blue: 0.79, alpha: 1)       // D1CFCA
     static let accent = DS.accent
     static let selection = DS.accent.withAlphaComponent(0.16)
 
@@ -29,6 +31,44 @@ private enum NB {
     static let accentC = Color(nsColor: DS.accent)
     static let hoverC = Color.black.opacity(0.05)
     static let selectionC = Color(nsColor: DS.accent).opacity(0.12)
+}
+
+// The note sheet's translucent, frosted backdrop: a warm off-white tint over a
+// behind-window blur, with our signature crimson/gray wash blobs and film grain
+// dialed down for a light surface. Empty areas here are the window-drag handle.
+private struct NotebookBackground: View {
+    var body: some View {
+        ZStack {
+            VisualEffectBackground(material: .underWindowBackground)
+            NB.surfaceC.opacity(0.64)
+            EllipticalGradient(
+                colors: [NB.accentC.opacity(0.11), .clear],
+                center: .topLeading, startRadiusFraction: 0, endRadiusFraction: 0.95)
+            EllipticalGradient(
+                colors: [NB.mutedC.opacity(0.10), .clear],
+                center: .bottomTrailing, startRadiusFraction: 0, endRadiusFraction: 0.95)
+            DSGrainOverlay(opacity: 0.09)
+        }
+        .ignoresSafeArea()
+        .gesture(WindowDragGesture())
+    }
+}
+
+private struct VisualEffectBackground: NSViewRepresentable {
+    var material: NSVisualEffectView.Material
+
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        view.material = material
+        view.blendingMode = .behindWindow
+        view.state = .active
+        view.appearance = NSAppearance(named: .aqua)
+        return view
+    }
+
+    func updateNSView(_ view: NSVisualEffectView, context: Context) {
+        view.material = material
+    }
 }
 
 // Notebook: a floating note panel toggled by a global hotkey. Notes persist as
@@ -349,14 +389,15 @@ final class NotebookPanelController {
 
     private func focus() {
         if let panel {
-            // Re-assert the float level and force it frontmost: as a background
-            // agent app, makeKeyAndOrderFront alone doesn't reliably raise the
-            // panel above the currently-active app's windows.
+            // Re-assert the float level and force it frontmost. No NSApp.activate:
+            // as a .nonactivatingPanel it takes key for typing without activating
+            // the app, which would otherwise yank a full-screen Space back to our
+            // desktop instead of overlaying the note on top of it.
             panel.level = config.floatOnTop ? .floating : .normal
             DSMotionAppKit.presentWindow(panel)
             panel.orderFrontRegardless()
+            panel.makeKey()
         }
-        NSApp.activate(ignoringOtherApps: true)
         model.focusEditor()
     }
 
@@ -369,23 +410,40 @@ final class NotebookPanelController {
         // Space (e.g. jotting a note while a video plays full-screen) without the
         // panel taking over or stealing that Space's full-screen focus itself.
         let p = NSPanel(contentViewController: hosting)
-        p.styleMask = [.titled, .closable, .resizable, .utilityWindow, .fullSizeContentView]
+        // .nonactivatingPanel: becomes key for text entry without activating the
+        // app, so summoning it over another app's full-screen Space overlays in
+        // place instead of pulling the Space back to our regular desktop.
+        p.styleMask = [.titled, .closable, .resizable, .utilityWindow, .nonactivatingPanel, .fullSizeContentView]
         p.title = "Notebook"
         p.titlebarAppearsTransparent = true
         p.titleVisibility = .hidden
         p.appearance = NSAppearance(named: .aqua)
-        p.backgroundColor = NB.surface
+        // Translucent: the SwiftUI root paints the frosted warm wash; the window
+        // stays clear so it reads through to whatever is behind it.
+        p.isOpaque = false
+        p.backgroundColor = .clear
         p.level = config.floatOnTop ? .floating : .normal
-        p.collectionBehavior = config.floatOnTop ? [.canJoinAllSpaces, .fullScreenAuxiliary] : []
+        // canJoinAllSpaces + fullScreenAuxiliary regardless of the float toggle,
+        // so it can surface onto an active full-screen Space.
+        p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         p.hidesOnDeactivate = false
-        // Explicit drag surfaces only (toolbar background + editor background),
-        // never controls; see AppearanceBackground's WindowDragGesture.
+        // Explicit drag surfaces only (the background wash), never controls;
+        // see NotebookBackground's WindowDragGesture.
         p.isMovableByWindowBackground = false
         p.isReleasedWhenClosed = false
         p.minSize = NSSize(width: 480, height: 340)
         p.setContentSize(NSSize(width: 680, height: 440))
         if !p.setFrameUsingName("FreeKit.NotebookPanel") { p.center() }
         p.setFrameAutosaveName("FreeKit.NotebookPanel")
+        // Traffic lights only while focused: hidden as the panel floats over
+        // another app, shown once it's clicked into (mirrors the ✕ in the bar).
+        Self.setTrafficLights(p, hidden: true)
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.didBecomeKeyNotification, object: p, queue: .main
+        ) { [weak p] _ in if let p { Self.setTrafficLights(p, hidden: false) } }
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.didResignKeyNotification, object: p, queue: .main
+        ) { [weak p] _ in if let p { Self.setTrafficLights(p, hidden: true) } }
         // The close button bypasses hide(): still a "close" for sync purposes.
         NotificationCenter.default.addObserver(
             forName: NSWindow.willCloseNotification, object: p, queue: .main
@@ -396,7 +454,12 @@ final class NotebookPanelController {
         panel = p
         floatCancellable = config.$floatOnTop.sink { [weak p] onTop in
             p?.level = onTop ? .floating : .normal
-            p?.collectionBehavior = onTop ? [.canJoinAllSpaces, .fullScreenAuxiliary] : []
+        }
+    }
+
+    private static func setTrafficLights(_ window: NSWindow, hidden: Bool) {
+        for kind in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
+            window.standardWindowButton(kind)?.isHidden = hidden
         }
     }
 }
@@ -885,34 +948,36 @@ struct NotebookView: View {
     @State private var showOverflow = false
 
     var body: some View {
-        HStack(spacing: 0) {
-            if config.sidebarVisible {
-                sidebar
-                Rectangle().fill(NB.hairlineC).frame(width: 1)
-            }
-
-            VStack(alignment: .leading, spacing: 0) {
-                // Centered so it clears the (left-hung) traffic lights; doubles as
-                // the panel's title the way the reference app's header reads.
-                TextField("Untitled", text: $model.editedTitle)
-                    .textFieldStyle(.plain)
-                    .multilineTextAlignment(.center)
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(NB.inkC)
-                    .padding(.horizontal, 72)
-                    .padding(.top, 9)
-                    .padding(.bottom, 8)
-                    .background(NB.surfaceC.gesture(WindowDragGesture()))
-                RichTextEditor(model: model, proxy: editor)
-                Rectangle().fill(NB.hairlineC).frame(height: 1)
-                GeometryReader { geo in
-                    bottomBar(width: geo.size.width)
+        ZStack {
+            NotebookBackground()
+            HStack(spacing: 0) {
+                if config.sidebarVisible {
+                    sidebar
+                    Rectangle().fill(NB.hairlineC).frame(width: 1)
                 }
-                .frame(height: 46)
-                .background(NB.barC.gesture(WindowDragGesture()))
+
+                VStack(alignment: .leading, spacing: 0) {
+                    // Centered so it clears the (left-hung) traffic lights; doubles
+                    // as the panel's title the way the reference app's header reads.
+                    // No fill: empty title-row space falls through to the drag wash.
+                    TextField("Untitled", text: $model.editedTitle)
+                        .textFieldStyle(.plain)
+                        .multilineTextAlignment(.center)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(NB.inkC)
+                        .padding(.horizontal, 72)
+                        .padding(.top, 9)
+                        .padding(.bottom, 8)
+                    RichTextEditor(model: model, proxy: editor)
+                    Rectangle().fill(NB.hairlineC).frame(height: 1)
+                    GeometryReader { geo in
+                        bottomBar(width: geo.size.width)
+                    }
+                    .frame(height: 46)
+                    .background(NB.barC.opacity(0.45).gesture(WindowDragGesture()))
+                }
             }
         }
-        .background(NB.surfaceC)
         .frame(minWidth: 480, minHeight: 340)
         .animation(DS.animBase, value: config.sidebarVisible)
         .onChange(of: config.sortOrder) { _, _ in model.refresh() }
@@ -968,7 +1033,7 @@ struct NotebookView: View {
         }
         .padding(12)
         .frame(width: config.sidebarWidth)
-        .background(NB.surfaceC)
+        .background(NB.surfaceC.opacity(0.4).gesture(WindowDragGesture()))
     }
 
     // MARK: Adaptive one-line toolbar
@@ -1810,16 +1875,19 @@ struct RichTextEditor: NSViewRepresentable {
         tv.allowsImageEditing = true
         tv.allowsUndo = true
         tv.usesFindBar = true
-        tv.drawsBackground = true
-        tv.backgroundColor = NB.surface
+        // Transparent so the translucent frosted wash behind the panel reads
+        // through the text area, not just the chrome.
+        tv.drawsBackground = false
+        tv.backgroundColor = .clear
         tv.insertionPointColor = NB.accent
         tv.textContainerInset = NSSize(width: 18, height: 14)
         tv.typingAttributes = model.config.bodyAttributes
         tv.isContinuousSpellCheckingEnabled = model.config.spellCheck
         tv.isAutomaticQuoteSubstitutionEnabled = model.config.smartQuotes
         tv.selectedTextAttributes = [.backgroundColor: NB.selection]
-        scroll.drawsBackground = true
-        scroll.backgroundColor = NB.surface
+        scroll.drawsBackground = false
+        scroll.backgroundColor = .clear
+        scroll.contentView.drawsBackground = false
         proxy.textView = tv
         model.editorTextView = tv
         context.coordinator.textView = tv

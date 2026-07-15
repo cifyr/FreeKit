@@ -1867,16 +1867,18 @@ enum RichTextImageSupport {
     }
 }
 
-// Draws the insertion caret at the font's glyph height instead of the full
-// line-fragment height, which lineSpacing (and line-height multiples) inflate.
-// Glyphs sit at the top of the fragment, so the shortened caret anchors to the
-// top of the rect AppKit hands us.
+// Draws the insertion caret at the text's own height (ascender→descender)
+// instead of the full line-fragment height, which lineSpacing inflates. Glyphs
+// sit at the top of the fragment, so the shortened caret keeps the rect's top
+// origin and the extra line gap stays below it (matching Raycast's look).
+// Requires TextKit 1 (see makeNSView): TextKit 2's insertion indicator ignores
+// this override.
 final class NotebookTextView: NSTextView {
     override func drawInsertionPoint(in rect: NSRect, color: NSColor, turnedOn flag: Bool) {
         var r = rect
         let font = (typingAttributes[.font] as? NSFont) ?? .systemFont(ofSize: 13)
-        let glyphHeight = layoutManager?.defaultLineHeight(for: font) ?? (font.ascender - font.descender)
-        if glyphHeight > 0, glyphHeight < r.height { r.size.height = ceil(glyphHeight) }
+        let textHeight = ceil(font.ascender - font.descender)
+        if textHeight > 0, textHeight < r.height { r.size.height = textHeight }
         super.drawInsertionPoint(in: r, color: color, turnedOn: flag)
     }
 }
@@ -1897,6 +1899,10 @@ struct RichTextEditor: NSViewRepresentable {
         scroll.borderType = .noBorder
         scroll.autohidesScrollers = true
         let tv = NotebookTextView(frame: .zero)
+        // Force TextKit 1 so our drawInsertionPoint override is used; TextKit 2
+        // (the macOS 26 default) draws the caret via NSTextInsertionIndicator and
+        // ignores it, leaving the caret full line-fragment height.
+        _ = tv.layoutManager
         tv.isVerticallyResizable = true
         tv.isHorizontallyResizable = false
         tv.autoresizingMask = [.width]

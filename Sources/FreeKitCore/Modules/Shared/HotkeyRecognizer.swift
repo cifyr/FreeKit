@@ -58,7 +58,15 @@ public final class HotkeyRecognizer {
             // While the combo is held (push-to-talk), the key autorepeats: every
             // one of those must be swallowed or the app underneath receives a
             // stream of e.g. Cmd+= presses while the user is dictating.
-            if comboIsDown || awaitingKeyUp { return .swallow }
+            if comboIsDown || awaitingKeyUp {
+                // A genuine held-combo repeat stays swallowed. A fresh (non-repeat)
+                // press while still "down" means the prior key-up never arrived
+                // (tap timeout, Space/app switch, secure input) — recover the
+                // dropped state instead of wedging the hotkey until reset().
+                if isAutorepeat { return .swallow }
+                comboIsDown = false
+                awaitingKeyUp = false
+            }
             guard relevant == required else { return .pass }
             guard !isAutorepeat else { return .swallow }
             comboIsDown = true

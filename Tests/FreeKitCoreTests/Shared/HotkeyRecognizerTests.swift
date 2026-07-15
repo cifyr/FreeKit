@@ -101,6 +101,35 @@ final class HotkeyRecognizerTests: XCTestCase {
             .pass)
     }
 
+    // A dropped key-up (tap timeout, Space switch, secure input) must not wedge
+    // the hotkey: the next fresh press recovers and fires instead of swallowing.
+    func testDroppedKeyUpRecoversOnNextPress() {
+        let recognizer = HotkeyRecognizer(preset: .f13)
+        XCTAssertEqual(
+            recognizer.handle(kind: .keyDown, keyCode: 105, flags: 0, isAutorepeat: false),
+            .fire(.down, swallow: true))
+        // Key-up never arrives; comboIsDown is now stale. A fresh press re-fires.
+        XCTAssertEqual(
+            recognizer.handle(kind: .keyDown, keyCode: 105, flags: 0, isAutorepeat: false),
+            .fire(.down, swallow: true))
+        // Genuine autorepeat of the held key is still swallowed silently.
+        XCTAssertEqual(
+            recognizer.handle(kind: .keyDown, keyCode: 105, flags: 0, isAutorepeat: true),
+            .swallow)
+    }
+
+    // The same recovery applies to a combo: a dropped key-up leaves comboIsDown
+    // set, and the next fresh chord press must fire rather than swallow forever.
+    func testDroppedKeyUpRecoversForCombo() {
+        let preset = HotkeyPreset.custom(keyCode: 40, modifiers: [.command])  // Cmd+K
+        let recognizer = HotkeyRecognizer(preset: preset)
+        _ = recognizer.handle(kind: .keyDown, keyCode: 40, flags: commandFlag, isAutorepeat: false)
+        // Key-up dropped; a fresh Cmd+K fires again.
+        XCTAssertEqual(
+            recognizer.handle(kind: .keyDown, keyCode: 40, flags: commandFlag, isAutorepeat: false),
+            .fire(.down, swallow: true))
+    }
+
     func testResetClearsHeldState() {
         let recognizer = HotkeyRecognizer(preset: .f13)
         _ = recognizer.handle(kind: .keyDown, keyCode: 105, flags: 0, isAutorepeat: false)

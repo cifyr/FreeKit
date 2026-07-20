@@ -357,13 +357,19 @@ final class NotebookPanelController {
     // another app the "toggle" would vanish a panel you could barely see).
     // Visible and focused -> hide.
     func toggle() {
-        guard let panel, panel.isVisible else {
+        // A panel mid-dismiss is technically still isVisible but fading to alpha
+        // 0; treat that (and any not-fully-opaque state) as "not shown" so a
+        // summon re-presents it instead of racing the close animation.
+        guard let panel, panel.isVisible, panel.alphaValue > 0.5 else {
+            Log.info("notebook: toggle -> show (was not shown)")
             show()
             return
         }
         if panel.isKeyWindow {
+            Log.info("notebook: toggle -> hide (was key)")
             hide()
         } else {
+            Log.info("notebook: toggle -> focus (was visible, not key)")
             focus()
         }
     }
@@ -406,6 +412,7 @@ final class NotebookPanelController {
             DSMotionAppKit.presentWindow(panel)
             panel.orderFrontRegardless()
             panel.makeKey()
+            Log.info("notebook: focus done visible=\(panel.isVisible) alpha=\(panel.alphaValue) key=\(panel.isKeyWindow) frame=\(NSStringFromRect(panel.frame)) screen=\(panel.screen.map { NSStringFromRect($0.frame) } ?? "nil")")
         }
         model.focusEditor()
     }
@@ -998,6 +1005,15 @@ struct NotebookView: View {
 
     var body: some View {
         ZStack {
+            // Cmd+N makes a new note while the panel is focused. Kept at the root
+            // (not on the sidebar's New Note button) so it works with the sidebar
+            // hidden; invisible and zero-size so it's shortcut-only.
+            Button("New Note") { model.newNote() }
+                .keyboardShortcut("n", modifiers: .command)
+                .opacity(0)
+                .frame(width: 0, height: 0)
+                .accessibilityHidden(true)
+
             NotebookBackground()
             HStack(spacing: 0) {
                 if config.sidebarVisible {

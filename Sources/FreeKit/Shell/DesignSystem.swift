@@ -656,6 +656,10 @@ enum DSMotionAppKit {
     // plain show/dismiss.
     static func presentWindow(_ window: NSWindow) {
         guard !reduceMotion, !window.isVisible else {
+            // Already on screen — but a dismiss fade-out may be mid-flight with
+            // alpha driving to 0; snap it back to fully opaque so re-summoning
+            // never leaves an invisible (or about-to-orderOut) window.
+            window.alphaValue = 1
             window.makeKeyAndOrderFront(nil)
             return
         }
@@ -670,8 +674,14 @@ enum DSMotionAppKit {
     }
 
     static func dismissWindow(_ window: NSWindow, close: Bool) {
-        let finish = {
-            if close { window.close() } else { window.orderOut(nil) }
+        let finish = { [weak window] in
+            guard let window else { return }
+            // A presentWindow may have run during our fade-out and reset alpha to
+            // 1; in that case the user re-summoned the window, so don't order it
+            // out from this now-stale completion.
+            if window.alphaValue < 0.5 {
+                if close { window.close() } else { window.orderOut(nil) }
+            }
             window.alphaValue = 1
         }
         guard !reduceMotion, window.isVisible else { finish(); return }

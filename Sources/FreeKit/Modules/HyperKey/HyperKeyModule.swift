@@ -9,12 +9,19 @@ import FreeKitCore
 // mapping is session-scoped: it clears on deactivate/quit and does not survive
 // reboot, so activate() reapplies it. If the app crashes while enabled, Caps
 // Lock acts as F18 until relaunch or reboot.
+//
+// The mapping has also been observed to silently drop out from under a
+// per-device HID service — independent of this app, with no crash/deactivate/
+// quit involved — most reliably around sleep/wake. Since there is no
+// notification for "the mapping you set got cleared," the practical fix is to
+// reassert it on every system wake rather than try to detect the drop.
 final class HyperKeyModule: AppModule, EventRewriter {
     let info = ModuleCatalog.hyperKey
 
     private let settings: Settings
     private let hub: EventTapHub
     private let mapper: HyperKeyMapper
+    private var wakeObserver: NSObjectProtocol?
 
     private enum Key {
         static let holdFlags = "holdFlags"
@@ -62,9 +69,19 @@ final class HyperKeyModule: AppModule, EventRewriter {
     func activate() {
         setHidRemapEnabled(true)
         hub.addRewriter(self)
+        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Log.info("hyperkey: system woke, reasserting HID remap")
+            self?.setHidRemapEnabled(true)
+        }
     }
 
     func deactivate() {
+        if let wakeObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver)
+        }
+        wakeObserver = nil
         hub.removeRewriter(self)
         setHidRemapEnabled(false)
     }
